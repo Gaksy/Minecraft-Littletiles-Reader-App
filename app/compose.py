@@ -26,6 +26,37 @@ class ComposeError(Exception):
     """组合不了——原因写给用户看。"""
 
 
+def _merge_pack_textures(app_dir: Path, packs: list) -> Path:
+    """把所有资源包的贴图按顺序并成一个临时包：**后写的覆盖先写的**。
+
+    生成端的合并脚本一次只吃一个 `--pack`，所以多个资源包不能直接串。
+    与其"逐个叠加、每轮把上一轮当底"（那样每轮都从底包重建，会丢东西——模组那轮
+    踩过这个坑），不如先把贴图并成一份再交出去：一次调用，覆盖语义天然就是
+    "列表里靠下的优先"。
+    """
+    stage = app_dir / "cache" / "sources" / "packs_merged"
+    if stage.exists():
+        shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True, exist_ok=True)
+
+    for pack in packs:      # 顺序即优先级：后写的覆盖先写的
+        root = Path(pack.path)
+        assets = root / "assets"
+        if not assets.is_dir():
+            # 资源包常多套一层文件夹
+            nested = next(
+                (p for p in sorted(root.glob("*/assets")) if p.is_dir()), None
+            )
+            if nested is None:
+                raise ComposeError("资源包里没有 assets/：%s" % pack.name)
+            assets = nested
+        for png in assets.rglob("*.png"):
+            destination = stage / png.relative_to(root)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(png, destination)
+    return stage
+
+
 @dataclass
 class Composed:
     package_dir: Path
@@ -60,22 +91,20 @@ def compose(
             "启用列表里没有「原版」——映射表是以它建成的，缺了它导不出带贴图的模型。"
         )
     packs = [s for s in selected if s.kind == KIND_PACK]
-    if packs:
-        raise ComposeError(
-            "资源包叠加还没做：%s\n（第 5 步目前只支持 原版 + 模组；"
-            "资源包需要先与原版合并，属于下一步。）"
-            % ", ".join(s.name for s in packs)
-        )
 
     fingerprint = order_fingerprint(library)
     out_dir = app_dir / "cache" / "packages" / fingerprint
     if not force and (out_dir / "block_textures.tsv").is_file():
         return Composed(out_dir, True, "复用上次的组合（顺序与素材都没变）")
 
-    # 1) 原版底包：从库里存的解压结果建，顺带补齐全部原版贴图
+    # 1) 原版底包：从库里存的解压结果建，顺带补齐全部原版贴图。
+    #    有资源包时先把它们并成一个临时包交给生成端覆盖。
     if out_dir.exists():
         shutil.rmtree(out_dir, ignore_errors=True)
-    build = build_package_from_resolved(Path(base.path), out_dir, base.name)
+    pack_root = _merge_pack_textures(app_dir, packs) if packs else None
+    build_package_from_resolved(
+        Path(base.path), out_dir, base.name, pack_root=pack_root
+    )
 
     mods = [s for s in selected if s.kind == KIND_MOD]
     note = "原版 %s" % base.name

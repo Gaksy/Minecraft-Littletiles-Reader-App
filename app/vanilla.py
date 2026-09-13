@@ -75,10 +75,14 @@ def build_package_from_resolved(
     package_root: Path,
     out_dir: Path,
     source_note: str = "目录",
+    pack_root: Path | None = None,
 ) -> PackageBuild:
     """已经解压好（并已定位到包根）时走这条——避免为了探测再解压一遍。
 
     一个 1.12.2 客户端 jar 解压要十几秒，解两次是白花的。
+
+    `pack_root` 是"提供贴图的那一层"：不给就用 `package_root` 自己（客户端 jar
+    本身就是个合法的资源包布局）。要叠加资源包时，把合并好的临时包传进来。
     """
     package_root = Path(package_root)
     # jar 的包根（含 assets/ 的那层）要留给生成端认"资源包布局"，
@@ -89,7 +93,8 @@ def build_package_from_resolved(
             "这个来源里没有 %s，看起来不是 Minecraft 客户端 jar：%s"
             % (VANILLA_MARKER, package_root)
         )
-    pack_root = package_root   # 含 assets/ 的那层，生成端按它找包前缀
+    # 含 assets/ 的那层，生成端按它找包前缀
+    pack_root = Path(pack_root) if pack_root is not None else package_root
 
     out_dir = Path(out_dir)
     if out_dir.exists():
