@@ -78,6 +78,9 @@ class MaterialChoiceDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        # 固定大小：内容就这么点，不要留一片空白也不要能拖大
+        layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+
     def _pick(self, choice: str) -> None:
         self._choice = choice
         self.accept()

@@ -250,7 +250,17 @@ class MainWindow(QMainWindow):
     # ---- 两个入口 --------------------------------------------------------
 
     def _export_region(self) -> None:
-        dialog = ExportRegionDialog(self.config, self, initial=self.config.last_export)
+        # 第一次用的人不知道三种选择方式的区别，自动把说明弹一次；之后收进按钮。
+        first_time = not self.config.shown_chunk_help
+        dialog = ExportRegionDialog(
+            self.config,
+            self,
+            initial=self.config.last_export,
+            show_help_on_open=first_time,
+        )
+        if first_time:
+            self.config.shown_chunk_help = True
+            self.config.save()
         if dialog.exec() != ExportRegionDialog.DialogCode.Accepted:
             return
         if not dialog.save_edit.text().strip():

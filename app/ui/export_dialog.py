@@ -12,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -41,9 +40,7 @@ from ..job import (
     expand_chunks,
 )
 from .theme import colors_for
-
-# 仓库根/docs/chunk-selection-modes.svg（app/ui/ → app/ → 仓库根）
-MODES_SVG = Path(__file__).resolve().parents[2] / "docs" / "chunk-selection-modes.svg"
+from .illustration_dialog import IllustrationDialog
 
 
 class ExportRegionDialog(QDialog):
@@ -58,6 +55,7 @@ class ExportRegionDialog(QDialog):
         config: AppConfig,
         parent: QWidget | None = None,
         initial: dict | None = None,
+        show_help_on_open: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("导出存档模型")
@@ -65,6 +63,11 @@ class ExportRegionDialog(QDialog):
         self._initial = dict(initial or {})
         self._build_ui()
         self._sync()
+        # 固定大小：所有行始终在位（不适用的只是置灰），内容高度是确定的，
+        # 没理由让用户拖出一个空一半的窗口。
+        self.layout().setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+        if show_help_on_open:
+            self._show_help()
 
     # ---- 界面 ------------------------------------------------------------
 
@@ -130,13 +133,9 @@ class ExportRegionDialog(QDialog):
 
         # 右：示意图（静态） + 本次范围摘要
         right_layout = QVBoxLayout()
-        if MODES_SVG.is_file():
-            self.illustration = QSvgWidget(str(MODES_SVG))
-            # 原图 1240×576，按这个比例给个能看清文字的大小
-            self.illustration.setFixedSize(660, 307)
-        else:
-            self.illustration = QLabel("（找不到示意图：%s）" % MODES_SVG)
-        right_layout.addWidget(self.illustration)
+        self.help_button = QPushButton("区块选择说明…")
+        self.help_button.clicked.connect(self._show_help)
+        right_layout.addWidget(self.help_button)
 
         self.summary = QLabel()
         self.summary.setWordWrap(True)
@@ -178,6 +177,10 @@ class ExportRegionDialog(QDialog):
         chosen = QFileDialog.getExistingDirectory(self, "选择存档根目录")
         if chosen:
             self.save_edit.setText(chosen)
+
+    def _show_help(self) -> None:
+        """三种选择模式的示意图：按需打开，不常驻。"""
+        IllustrationDialog(self).exec()
 
     def _sync(self) -> None:
         mode = self.mode.currentData()

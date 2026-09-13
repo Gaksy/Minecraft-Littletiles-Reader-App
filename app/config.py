@@ -30,6 +30,7 @@ class AppConfig:
     projects: list[dict] = field(default_factory=list)  # 项目登记表（M2 用）
     last_export: dict = field(default_factory=dict)     # 上次的导出选项，作为下次默认
     ask_open_output: bool = True                        # 导出完成后是否询问打开目录
+    shown_chunk_help: bool = False                      # 区块选择说明是否已经自动弹过一次
 
     @staticmethod
     def load(path: Path | None = None) -> "AppConfig":
