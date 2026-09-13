@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QEventLoop, QThread, QUrl, Qt, Signal
@@ -112,6 +113,23 @@ class _PackageBuilder(QThread):
             self.finished_with.emit(error)
 
 
+class _Composer(QThread):
+    """后台把素材按启用顺序组合起来（首次 4~5 秒，放主线程会冻住界面）。"""
+
+    finished_with = Signal(object)   # Composed，或捕到的 Exception
+
+    def __init__(self, app_dir: Path, library, parent=None) -> None:
+        super().__init__(parent)
+        self._app_dir = app_dir
+        self._library = library
+
+    def run(self) -> None:
+        try:
+            self.finished_with.emit(compose(self._app_dir, self._library))
+        except Exception as error:
+            self.finished_with.emit(error)
+
+
 def busy_dialog(title: str, text: str, parent) -> QProgressDialog:
     """不确定时长的进度框：一直在动，但不说"还剩多少"，因为确实不知道。"""
     dialog = QProgressDialog(text, "", 0, 0, parent)
@@ -126,6 +144,24 @@ def busy_dialog(title: str, text: str, parent) -> QProgressDialog:
 
 
 class MainWindow(QMainWindow):
+    def _git_revision(self) -> str:
+        """当前跑的是哪次提交——"我到底测的是哪版"这个问题，一行就答了。"""
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(APP_DIR), "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            revision = (done.stdout or "").strip() or "未知"
+            status = subprocess.run(
+                ["git", "-C", str(APP_DIR), "status", "--porcelain"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            if (status.stdout or "").strip():
+                revision += "（工作区有未提交改动）"
+            return revision
+        except Exception:
+            return "未知"
+
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.setWindowTitle("LittleTiles Reader")
@@ -310,18 +346,32 @@ class MainWindow(QMainWindow):
 
     def _compose_assets(self, library) -> str | None:
         """按启用顺序组合并返回素材包路径；失败时提示并返回 None。"""
+        # 组合在后台线程里跑：首次或素材变动要 4~5 秒，放主线程界面会冻住
+        # （进度框也不转，看着像卡死）。用嵌套事件循环等它，界面照常重绘。
         progress = busy_dialog("材质组合", "正在按启用顺序组合素材…", self)
-        try:
-            composed = compose(APP_DIR, library)
-        except ComposeError as error:
-            QMessageBox.warning(self, "组合不了", str(error))
+        composer = _Composer(APP_DIR, library, self)
+        result: dict = {}
+        loop = QEventLoop()
+
+        def finished(payload) -> None:
+            result["payload"] = payload
+            loop.quit()
+
+        composer.finished_with.connect(finished)
+        composer.start()
+        loop.exec()
+        composer.wait()
+        progress.close()
+
+        payload = result.get("payload")
+        if isinstance(payload, ComposeError):
+            QMessageBox.warning(self, "组合不了", str(payload))
             return None
-        except Exception as error:      # 解压/脚本报错…
+        if isinstance(payload, Exception):      # 解压/脚本报错…
             logger().exception("组合素材失败")
-            QMessageBox.warning(self, "组合失败", str(error))
+            QMessageBox.warning(self, "组合失败", str(payload))
             return None
-        finally:
-            progress.close()
+        composed = payload
         self._log(
             "  素材包: %s（%s%s）"
             % (
@@ -363,11 +413,13 @@ class MainWindow(QMainWindow):
             "关于",
             "LittleTiles Reader\n\n"
             "界面版本：%s\n库版本：%s\n\n"
+            "提交：%s\n\n"
             "会话日志：\n%s\n\n"
             "素材全部来自你自己的游戏与资源包，本工具只读取、不附带也不分发。"
             % (
                 __version__,
                 self._library_version or "（本次还没导出过）",
+                self._git_revision(),
                 session_path() or "（未启用日志）",
             ),
         )
@@ -393,22 +445,8 @@ class MainWindow(QMainWindow):
         # 有变动就立刻重新组合：组合按顺序指纹缓存，没变是毫秒级命中，
         # 变了正好在用户还在看界面时把它算完，别拖到导出那一刻。
         if chosen:
-            progress = busy_dialog("材质组合", "素材有变动，正在重新组合…", self)
-            try:
-                composed = compose(APP_DIR, manager.library)
-            except ComposeError as error:
-                QMessageBox.warning(self, "组合不了", str(error))
-                return
-            finally:
-                progress.close()
-            self._log(
-                "  组合完成: %s（%s%s）"
-                % (
-                    composed.package_dir.name,
-                    composed.note,
-                    "，复用上次结果" if composed.reused else "",
-                )
-            )
+            # 有变动就立刻重组（走同一条后台线程路径），别拖到导出那一刻
+            self._compose_assets(manager.library)
 
     def _import_assets_file(self) -> str | None:
         """选一个 zip / rar / jar，应用自己判断是什么并整理成素材包。
