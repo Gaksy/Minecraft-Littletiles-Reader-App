@@ -35,9 +35,12 @@ from ..config import APP_DIR, AppConfig
 from ..job import ExportProgress, build_snbt_job, default_options, write_job
 from ..runner import ExportRunner
 from ..sources import ARCHIVE_SUFFIXES, resolve_source
+from ..compose import ComposeError, compose
+from ..library import Library
 from ..vanilla import build_package_from_resolved, detect_kind
 from .export_dialog import ExportRegionDialog
 from .material_dialog import MaterialChoiceDialog
+from .material_manager import MaterialManagerDialog
 from .theme import colors_for
 
 
@@ -228,31 +231,52 @@ class MainWindow(QMainWindow):
         return paths.reader_executable()
 
     def _choose_assets(self) -> str | None:
-        """问一句本次用什么材质。
+        """打开材质管理 → 按启用顺序组合 → 返回组合好的素材包。
 
-        返回素材包路径；`""` = 不用材质（导出白模）；`None` = 用户取消。
+        返回素材包路径；`""` = 不用材质（白模）；`None` = 用户取消。
 
-        为什么要问而不是直接用配置：第一次用的人手上通常什么都没有，
-        "不用材质"必须能一步选到，而不是被逼着去翻目录选择框。
+        用户面对的是"素材列表"而不是"选一个目录/文件"：导入、启用、排序都在材质
+        管理里做，这里只把右列的顺序变成实际可用的素材包。
         """
-        configured = self.config.default_assets
-        if configured and not lint_package(Path(configured)).ok:
-            self._log("已配置的素材包不可用，请重新选择：%s" % configured)
-            configured = ""
+        library = Library.load(APP_DIR)
+        if not library.sources:
+            # 库里还什么都没有：先说明要什么、并给"不用材质"的出口。
+            dialog = MaterialChoiceDialog("", self)
+            if dialog.exec() != MaterialChoiceDialog.DialogCode.Accepted:
+                return None
+            if dialog.choice == "none":
+                self._log("本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。")
+                return ""
 
-        dialog = MaterialChoiceDialog(configured, self)
-        if dialog.exec() != MaterialChoiceDialog.DialogCode.Accepted:
+        manager = MaterialManagerDialog(APP_DIR, self)
+        if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
             return None
-        if dialog.choice == "none":
-            self._log(
-                "本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。"
-            )
+        if not manager.library.selected():
+            self._log("未启用任何素材：本次导出白模。")
             return ""
-        if dialog.choice == "configured" and configured:
-            for warning in lint_package(Path(configured)).warnings:
-                self._log("素材包提示: %s" % warning)
-            return configured
-        return self._import_assets_file()
+
+        self._log("按启用顺序组合素材…")
+        progress = busy_dialog("材质组合", "正在按启用顺序组合素材…", self)
+        try:
+            composed = compose(APP_DIR, manager.library)
+        except ComposeError as error:
+            QMessageBox.warning(self, "组合不了", str(error))
+            return None
+        except Exception as error:      # 解压/脚本报错…
+            logger().exception("组合素材失败")
+            QMessageBox.warning(self, "组合失败", str(error))
+            return None
+        finally:
+            progress.close()
+        self._log(
+            "  素材包: %s（%s%s）"
+            % (
+                composed.package_dir.name,
+                composed.note,
+                "，复用上次结果" if composed.reused else "",
+            )
+        )
+        return str(composed.package_dir)
 
     def _import_assets_file(self) -> str | None:
         """选一个 zip / rar / jar，应用自己判断是什么并整理成素材包。

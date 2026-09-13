@@ -111,8 +111,15 @@ class Library:
     # ---- 修改 ------------------------------------------------------------
 
     def enable(self, source_id: str) -> None:
-        if source_id not in self.enabled:
-            self.enabled.append(source_id)      # 追加到末尾 = 优先级最低
+        if source_id in self.enabled:
+            return
+        source = self.by_id(source_id)
+        # 原版是映射表的底：永远排在最前（优先级最低）。让它跑到下面等于原版去
+        # 覆盖模组，而用户在列表上完全看不出这件事——所以直接不允许。
+        if source is not None and source.kind == KIND_VANILLA:
+            self.enabled.insert(0, source_id)
+        else:
+            self.enabled.append(source_id)      # 追加到末尾 = 优先级更高
 
     def disable(self, source_id: str) -> None:
         self.enabled = [i for i in self.enabled if i != source_id]
@@ -121,8 +128,17 @@ class Library:
         """在启用列表里上下移动（-1 上移，+1 下移）；越界不动。"""
         if source_id not in self.enabled:
             return
+        source = self.by_id(source_id)
         index = self.enabled.index(source_id)
         target = max(0, min(len(self.enabled) - 1, index + delta))
+        # 原版钉在最前：它自己不许下移，别的也不许越过它。
+        # 只挡"原版下移"是不够的——别的项上移会跑到原版上面，同样让原版去覆盖模组。
+        if source is not None and source.kind == KIND_VANILLA:
+            target = 0
+        else:
+            base = self.base
+            if base is not None:
+                target = max(self.enabled.index(base.id) + 1, target)
         if target != index:
             self.enabled.insert(target, self.enabled.pop(index))
 
