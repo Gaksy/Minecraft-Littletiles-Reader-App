@@ -1,0 +1,141 @@
+"""区块选择网格：俯视图，每格一个区块（16×16 方块）。
+
+三种选择模式（见 docs/chunk-selection-modes.svg）都在这一个控件里表达；
+M4 会再把"导出过没有"的三态着色叠上来。
+"""
+
+from __future__ import annotations
+
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtWidgets import QWidget
+
+from ..job import ChunkRange
+
+CELL = 26          # 每格的像素边长
+BASE_SPAN = 9      # 至少显示 9×9 格，选中范围更大时自动扩展
+
+
+class ChunkGrid(QWidget):
+    """点击某格 = 把它设为中心（`cellClicked`）。"""
+
+    cellClicked = Signal(int, int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._center = (0, 0)
+        self._range = ChunkRange(0, 0, 1, 1)
+        self._hover: tuple[int, int] | None = None
+        self.setMouseTracking(True)
+        self.setMinimumSize(BASE_SPAN * CELL + 1, BASE_SPAN * CELL + 1)
+
+    def set_selection(self, center: tuple[int, int], selection: ChunkRange) -> None:
+        self._center = center
+        self._range = selection
+        self._resize_to_fit()
+        self.update()
+
+    def _span(self) -> int:
+        return max(
+            BASE_SPAN, max(self._range.count_x, self._range.count_z) + 2
+        )
+
+    def _resize_to_fit(self) -> None:
+        side = self._span() * CELL + 1
+        self.setMinimumSize(side, side)
+
+    def _origin(self) -> tuple[int, int]:
+        """网格左上角对应的区块坐标。"""
+        span = self._span()
+        return (
+            self._center[0] - span // 2,
+            self._center[1] - span // 2,
+        )
+
+    def _cell_at(self, pos: QPointF) -> tuple[int, int] | None:
+        span = self._span()
+        ox, oz = self._origin()
+        dx = int(pos.x() // CELL)
+        dz = int(pos.y() // CELL)
+        if 0 <= dx < span and 0 <= dz < span:
+            return (ox + dx, oz + dz)
+        return None
+
+    # ---- 绘制 ------------------------------------------------------------
+
+    def paintEvent(self, _event: object) -> None:
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#fcfcfd"))
+        span = self._span()
+        ox, oz = self._origin()
+
+        # 已选中的格子
+        selected = set(self._range.cells())
+        for cx, cz in selected:
+            rect = QRectF(
+                (cx - ox) * CELL, (cz - oz) * CELL, CELL, CELL
+            )
+            painter.fillRect(rect, QColor("#93c5fd"))
+
+        # 中心格单独加深
+        if self._center in selected:
+            rect = QRectF(
+                (self._center[0] - ox) * CELL,
+                (self._center[1] - oz) * CELL,
+                CELL,
+                CELL,
+            )
+            painter.fillRect(rect, QColor("#2563eb"))
+
+        # 网格线
+        painter.setPen(QPen(QColor("#dcdcdc"), 1))
+        for i in range(span + 1):
+            painter.drawLine(i * CELL, 0, i * CELL, span * CELL)
+            painter.drawLine(0, i * CELL, span * CELL, i * CELL)
+
+        # 选择范围的粗边框
+        painter.setPen(QPen(QColor("#2563eb"), 2))
+        painter.drawRect(
+            QRectF(
+                (self._range.min_x - ox) * CELL,
+                (self._range.min_z - oz) * CELL,
+                self._range.count_x * CELL,
+                self._range.count_z * CELL,
+            )
+        )
+
+        # 悬停格：坐标提示
+        if self._hover is not None:
+            hx, hz = self._hover
+            painter.setPen(QPen(QColor("#9ca3af"), 1, Qt.PenStyle.DashLine))
+            painter.drawRect(QRectF((hx - ox) * CELL, (hz - oz) * CELL, CELL, CELL))
+            painter.setFont(QFont("", 8))
+            painter.setPen(QColor("#6b7280"))
+            painter.drawText(
+                QRectF(0, 0, self.width(), 16),
+                Qt.AlignmentFlag.AlignLeft,
+                "  (%d, %d)" % (hx, hz),
+            )
+
+        # 原点提示（0,0 在视野内时画个十字）
+        if ox <= 0 < ox + span and oz <= 0 < oz + span:
+            painter.setPen(QPen(QColor("#f59e0b"), 1))
+            cx = (0 - ox) * CELL + CELL / 2
+            cz = (0 - oz) * CELL + CELL / 2
+            painter.drawLine(int(cx - 6), int(cz), int(cx + 6), int(cz))
+            painter.drawLine(int(cx), int(cz - 6), int(cx), int(cz + 6))
+
+    # ---- 交互 ------------------------------------------------------------
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        self._hover = self._cell_at(event.position())
+        self.update()
+
+    def leaveEvent(self, _event: object) -> None:
+        self._hover = None
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        cell = self._cell_at(event.position())
+        if cell is not None:
+            self.cellClicked.emit(*cell)
