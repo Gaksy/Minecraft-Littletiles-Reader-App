@@ -142,3 +142,22 @@ def inspect_source(root: Path) -> SourceSummary:
         textures=textures,
         missing=tuple(missing),
     )
+
+
+def projects_using(source_id: str, project_dirs) -> list[str]:
+    """哪些项目绑定了这个素材（返回项目名，按目录顺序）。
+
+    用途：删除素材前先告诉用户"有 2 个项目在用它"——素材库是全局的，
+    项目只是引用，删掉之后那些项目导出会缺贴图。
+    """
+
+    from .project import Project          # 延迟导入：materials 不该硬依赖项目模块
+
+    names: list[str] = []
+    for directory in project_dirs:
+        project = Project.load(directory)
+        if project is None:
+            continue
+        if source_id in (project.materials or []):
+            names.append(project.name or Path(directory).name)
+    return names

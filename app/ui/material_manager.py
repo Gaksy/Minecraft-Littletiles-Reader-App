@@ -31,7 +31,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..library import KIND_LABELS, Library, import_source
-from ..materials import inspect_source
+from ..config import AppConfig
+from ..materials import inspect_source, projects_using
 from ..applog import logger
 from ..sources import ARCHIVE_SUFFIXES
 from . import design
@@ -214,7 +215,16 @@ class MaterialManagerDialog(QDialog):
         except OSError as error:
             self.details.setText("读不出内容：%s" % error)
             return
-        self.details.setText("%s：%s" % (source.name, summary.render()))
+        text = "%s：%s" % (source.name, summary.render())
+        # 素材库是全局的、项目只是引用它：删之前先说清哪些项目在用它
+        try:
+            config = AppConfig.load(self._app_dir / "config" / "app.json")
+            users = projects_using(source.id, config.project_paths())
+        except Exception:                     # 配置坏了也不该拖垮这里
+            users = []
+        if users:
+            text += "\n被 %d 个项目绑定：%s" % (len(users), "、".join(users))
+        self.details.setText(text)
 
     # ---- 列表刷新 --------------------------------------------------------
 

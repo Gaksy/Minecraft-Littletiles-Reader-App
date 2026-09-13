@@ -27,8 +27,73 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         FAILURES.append(name)
 
 
+def test_rar_fallback() -> None:
+    """rar 的兜底逻辑：按顺序试外部工具，全都没有时给出能照着做的提示。
+
+    真实 rar 样本几百 MB，测试里不折腾它；这里把 `which` 与 `subprocess.run`
+    换成替身，验证"第一个工具失败会继续试下一个""都没装时提示装什么"。
+    """
+
+    print("== rar 兜底 ==")
+    import app.sources as sources
+
+    with tempfile.TemporaryDirectory(prefix="lt-rar-") as tmp:
+        archive = Path(tmp) / "pack.rar"
+        archive.write_bytes(b"Rar!\x1a\x07\x00")     # 只当个普通文件，内容不会被读
+        target = Path(tmp) / "out"
+        target.mkdir()
+
+        calls: list[str] = []
+        real_run = sources.subprocess.run
+        real_which = sources.shutil.which
+
+        def fake_which(name):
+            return "/usr/bin/%s" % name if name in ("bsdtar", "unar") else None
+
+        def fake_run(command, **kwargs):
+            calls.append(command[0])
+            if command[0] == "bsdtar":
+                class Failed:
+                    returncode = 1
+                    stdout = ""
+                    stderr = "boom"
+                return Failed()
+            (target / "assets").mkdir(exist_ok=True)   # 第二个工具"成功"了
+
+            class Ok:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return Ok()
+
+        sources.shutil.which = fake_which
+        sources.subprocess.run = fake_run
+        try:
+            sources._extract_rar(archive, target)
+            check("第一个工具失败会继续试下一个", calls == ["bsdtar", "unar"], str(calls))
+            check("成功解压出了内容", (target / "assets").is_dir())
+        finally:
+            sources.shutil.which = real_which
+            sources.subprocess.run = real_run
+
+        # 一个工具都没有：要么明确报错，要么说明怎么装
+        sources.shutil.which = lambda name: None
+        try:
+            try:
+                sources._extract_rar(archive, target)
+                check("没有工具时给出明确错误", False, "居然没报错")
+            except RuntimeError as error:
+                message = str(error)
+                check("错误里说明试过哪些命令与怎么办",
+                      "rar" in message and ("手动解压" in message or "brew" in message),
+                      message)
+        finally:
+            sources.shutil.which = real_which
+
+
 def main() -> int:
     print("== 来源解析 ==")
+    test_rar_fallback()
     data = paths.data_root()
     with tempfile.TemporaryDirectory(prefix="lt-src-") as tmp:
         work = Path(tmp) / "work"

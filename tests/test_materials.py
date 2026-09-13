@@ -131,10 +131,35 @@ def test_manager_details() -> None:
         dialog.close()
 
 
+def test_projects_using() -> None:
+    print("哪些项目在用它：")
+    from app.config import AppConfig
+    from app.materials import projects_using
+    from app.project import Project
+
+    with tempfile.TemporaryDirectory(prefix="lt-mat-") as tmp:
+        root = Path(tmp)
+        house = Project.create(root / "house", "海滨小屋")
+        house.materials = ["abc", "other"]
+        house.save()
+        station = Project.create(root / "station", "地铁站")
+        station.materials = ["abc"]
+        station.save()
+        empty = Project.create(root / "empty", "空项目")
+        empty.save()
+
+        names = projects_using("abc", [str(house.path), str(station.path),
+                                       str(empty.path), str(root / "nope")])
+        check("列出两个绑定的项目", names == ["海滨小屋", "地铁站"], str(names))
+        check("没绑定的不算", "空项目" not in names)
+        check("不存在的目录跳过", len(names) == 2)
+
+
 def main() -> int:
     test_inspect()
     test_import_name()
     test_manager_details()
+    test_projects_using()
     print()
     if FAILURES:
         print("失败 %d 项: %s" % (len(FAILURES), ", ".join(FAILURES)))

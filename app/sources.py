@@ -24,6 +24,12 @@ ZIP_LIKE = (".zip", ".jar")
 RAR_LIKE = (".rar",)
 ARCHIVE_SUFFIXES = ZIP_LIKE + RAR_LIKE
 
+# 没有解压工具时给一句"照着敲就能好"的提示（各平台命令不同）
+RAR_INSTALL_HINT = (
+    "macOS 可 `brew install unar`，Windows 10+ 自带 tar 一般就够，"
+    "Linux 装 unar 或 unrar"
+)
+
 
 @dataclass
 class Resolved:
@@ -165,6 +171,6 @@ def _extract_rar(archive: Path, target: Path) -> None:
         if done.returncode == 0 and any(target.iterdir()):
             return
     raise RuntimeError(
-        "解压 rar 失败（试过：%s）。可以手动解压后选那个目录。"
-        % (", ".join(tried) or "无可用命令")
+        "解压 rar 失败（试过：%s）。%s，或者手动解压后选那个目录。"
+        % (", ".join(tried) or "无可用命令", RAR_INSTALL_HINT)
     )
