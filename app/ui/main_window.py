@@ -146,10 +146,19 @@ class MainWindow(QMainWindow):
 
     def _refresh_status(self) -> None:
         cli = self._cli_path()
-        assets = self.config.default_assets or "（未设置）"
-        version = ("    库版本: %s" % self._library_version) if self._library_version else ""
+        # 素材包：不可用的要当场标出来。否则一个失效路径（比如误选成了导出目录）
+        # 会被当成"已配置"，用户看状态栏以为没问题。
+        configured = self.config.default_assets
+        if not configured:
+            assets = "（未设置）"
+        elif lint_package(Path(configured)).ok:
+            assets = configured
+        else:
+            assets = "（不可用，导出时会让你重选）%s" % configured
+        version = ("    库 %s" % self._library_version) if self._library_version else ""
         self.status.showMessage(
-            "库 CLI: %s%s    素材包: %s" % (cli, version, assets)
+            "素材包: %s    模型输出目录: %s%s    CLI: %s"
+            % (assets, self.config.resolved_output_dir(), version, cli)
         )
 
     # ---- 依赖解析 --------------------------------------------------------
