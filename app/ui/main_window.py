@@ -41,6 +41,7 @@ from ..vanilla import build_package_from_resolved, detect_kind
 from .export_dialog import ExportRegionDialog
 from .material_dialog import MaterialChoiceDialog
 from .material_manager import MaterialManagerDialog
+from .illustration_dialog import IllustrationDialog
 from .theme import colors_for
 
 
@@ -171,10 +172,6 @@ class MainWindow(QMainWindow):
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
 
-        # 想改素材才进这里；不改就一直沿用上次的选择（走缓存）
-        self.btn_materials = QPushButton("材质管理…")
-        self.btn_materials.clicked.connect(self._open_materials)
-        layout.addWidget(self.btn_materials)
         # 等两个控件都建好了再上色（它俩的样式都从调色板来）
         self._apply_button_style()
 
@@ -199,6 +196,8 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.status = self.statusBar()
+        # 菜单栏最后建：它引用了日志面板这些控件，得等它们都存在
+        self._build_menu()
 
     def _apply_button_style(self) -> None:
         style = big_button_style(self.palette())
@@ -291,6 +290,46 @@ class MainWindow(QMainWindow):
             )
         )
         return str(composed.package_dir)
+
+    def _build_menu(self) -> None:
+        """管理类入口放菜单栏：主界面只留两个导出按钮，不跟它们抢位置。
+
+        菜单里只放"不常按、按了有明显后果"的东西；导出流程里要用的
+        （进度、取消、打开输出目录）留在主界面上。
+        """
+        bar = self.menuBar()
+
+        materials = bar.addMenu("素材(&M)")
+        materials.addAction("材质管理…", self._open_materials)
+        materials.addAction("区块选择说明…", self._show_help)
+
+        output = bar.addMenu("输出(&O)")
+        output.addAction("打开输出目录", self._open_last_output)
+        output.addAction("清空日志窗口", self.log.clear)
+
+        help_menu = bar.addMenu("帮助(&H)")
+        help_menu.addAction("关于", self._show_about)
+
+    def _show_help(self) -> None:
+        IllustrationDialog(self).exec()
+
+    def _show_about(self) -> None:
+        from .. import __version__
+        from ..applog import session_path
+
+        QMessageBox.information(
+            self,
+            "关于",
+            "LittleTiles Reader\n\n"
+            "界面版本：%s\n库版本：%s\n\n"
+            "会话日志：\n%s\n\n"
+            "素材全部来自你自己的游戏与资源包，本工具只读取、不附带也不分发。"
+            % (
+                __version__,
+                self._library_version or "（本次还没导出过）",
+                session_path() or "（未启用日志）",
+            ),
+        )
 
     def _open_materials(self) -> None:
         """管理素材（导入 / 启用 / 排序）。改完下次导出自动生效。"""
