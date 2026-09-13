@@ -74,6 +74,7 @@ class MainWindow(QMainWindow):
         self.config = config
         self.progress = ExportProgress()
         self._last_output_dir: Path | None = None
+        self._library_version = ""   # 由 start 事件带回
         self.runner = ExportRunner(self)
         self.runner.event.connect(self._on_event)
         self.runner.output_line.connect(self._log)
@@ -145,7 +146,10 @@ class MainWindow(QMainWindow):
     def _refresh_status(self) -> None:
         cli = self._cli_path()
         assets = self.config.default_assets or "（未设置）"
-        self.status.showMessage("库 CLI: %s    素材包: %s" % (cli, assets))
+        version = ("    库版本: %s" % self._library_version) if self._library_version else ""
+        self.status.showMessage(
+            "库 CLI: %s%s    素材包: %s" % (cli, version, assets)
+        )
 
     # ---- 依赖解析 --------------------------------------------------------
 
@@ -288,7 +292,15 @@ class MainWindow(QMainWindow):
                 % (event.get("blocks"), event.get("textures"), event.get("missing"))
             )
         elif kind == "start":
-            self._log("开始：%s，%s 个区块" % (event.get("mode"), event.get("chunks")))
+            library = event.get("library")
+            if library:
+                # 记下是哪个版本的库在干活：产物出问题时这是第一条线索
+                self._library_version = str(library)
+                self._refresh_status()
+            self._log(
+                "开始：%s，%s 个区块（库 %s）"
+                % (event.get("mode"), event.get("chunks"), library or "?")
+            )
         elif kind == "chunk":
             self._log(
                 "  区块 (%s, %s)  %s/%s"
