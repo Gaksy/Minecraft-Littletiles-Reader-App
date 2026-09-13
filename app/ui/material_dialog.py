@@ -22,25 +22,14 @@ from PySide6.QtWidgets import (
 from .theme import colors_for
 
 HELP_TEXT = (
-    "直接选一个 zip / rar / jar 文件即可，应用会自己认：\n"
-    "\n"
-    "  · Minecraft 1.12.2 客户端 jar —— 直接生成素材包（推荐，一步到位）\n"
-    "  · 资源包 / 模组 —— 目前还不能单独用（见下）\n"
-    "\n"
-    "客户端 jar 在你自己的游戏目录里，通常在：\n"
-    "\n"
-    "    <.minecraft>\\versions\\1.12.2\\1.12.2.jar\n"
-    "\n"
-    "它本身就是个压缩包，里面 assets/minecraft/ 装着 blockstates、models、\n"
-    "textures——应用会解压、整理成素材包，只用你自己的游戏文件。\n"
-    "\n"
-    "注意：别去 <.minecraft>\\assets\\ 找。那里只有声音和语言文件；\n"
-    "贴图是 1.13 之后才搬到那个目录的，1.12.2 一直放在 jar 里。\n"
-    "\n"
-    "资源包（换皮 zip）和模组 jar 需要先有原版底子才能合并，属于后续步骤。\n"
-    "\n"
-    "本工具不附带、也不提供这些素材的下载：贴图是 Mojang 的资源，随游戏分发。\n"
-    "不选素材也可以导出，那样得到的是没有贴图的白模。"
+    "<b>原版材质</b><br>"
+    "由于 Minecraft 贴图资源的版权原因，本工具不提供这些素材。<br>"
+    "您可以在个人游戏客户端的版本文件夹中选择 jar 文件，例如：<br>"
+    "<span style='font-family:Consolas,monospace'>"
+    "&nbsp;&nbsp;.minecraft\\versions\\1.12.2\\1.12.2.jar</span>"
+    "<br><br>"
+    "<b>其它材质或模组方块</b><br>"
+    "需要您自行选择导入 zip / rar / 模组 jar，由本工具提取其中的贴图。"
 )
 
 
@@ -67,6 +56,8 @@ class MaterialChoiceDialog(QDialog):
             layout.addWidget(label)
 
         hint = QLabel(HELP_TEXT)
+        # 上面的文案带了 <b>/<br>，显式声明富文本，别指望自动识别
+        hint.setTextFormat(Qt.TextFormat.RichText)
         hint.setWordWrap(True)
         hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         layout.addWidget(hint, 1)
