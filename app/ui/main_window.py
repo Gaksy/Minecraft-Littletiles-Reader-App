@@ -254,6 +254,15 @@ class MainWindow(QMainWindow):
             if dialog.choice == "none":
                 self._log("本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。")
                 return ""
+            if dialog.choice == "manage":
+                manager = MaterialManagerDialog(APP_DIR, self)
+                if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
+                    return None
+                library = manager.library
+                if not library.selected():
+                    self._log("未启用任何素材：本次导出白模。")
+                    return ""
+                return self._compose_assets(library)
 
         if not library.selected():
             # 有素材但一个都没启用 → 才需要打开管理界面
@@ -297,6 +306,10 @@ class MainWindow(QMainWindow):
             elif box.clickedButton() is not ok_button:
                 return None
 
+        return self._compose_assets(library)
+
+    def _compose_assets(self, library) -> str | None:
+        """按启用顺序组合并返回素材包路径；失败时提示并返回 None。"""
         progress = busy_dialog("材质组合", "正在按启用顺序组合素材…", self)
         try:
             composed = compose(APP_DIR, library)

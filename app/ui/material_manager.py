@@ -75,6 +75,11 @@ class MaterialManagerDialog(QDialog):
         self.btn_remove = QPushButton("从库中删除…")
         self.btn_remove.clicked.connect(self._remove_from_library)
         left_box.addWidget(self.btn_remove)
+        # 兜底：出了说不清的问题时，把库与缓存清空重来，比一点点排查快
+        self.btn_clear = QPushButton("清空重来…")
+        self.btn_clear.clicked.connect(self._clear_everything)
+        self.btn_clear.setToolTip("删掉导入的素材与组合缓存，回到刚装好的状态")
+        left_box.addWidget(self.btn_clear)
         columns.addLayout(left_box)
 
         middle = QVBoxLayout()
@@ -251,6 +256,34 @@ class MaterialManagerDialog(QDialog):
             self.library.sources = [s for s in self.library.sources if s.id != source_id]
             shutil.rmtree(source.path, ignore_errors=True)
         self._refresh()
+
+    def _clear_everything(self) -> None:
+        """清空素材库与所有缓存。
+
+        为什么要有这个：遇到说不清的问题时（贴图不对、类型识别错了、组合结果奇怪），
+        让用户能一步回到干净状态重来，比让他去翻 resources/ 和 cache/ 目录可靠得多。
+        """
+        if (
+            QMessageBox.question(
+                self,
+                "清空重来",
+                "将删除：\n"
+                "  · 已导入的全部素材（%d 个）\n"
+                "  · 组合缓存\n\n"
+                "原始 zip / rar / jar 不会被删，之后可以重新导入。\n\n确定吗？"
+                % len(self.library.sources),
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        for child in ("sources", "packages", "icons"):
+            target = self._app_dir / ("cache" if child != "sources" else "resources") / child
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.rmtree(self._app_dir / "cache" / "packages", ignore_errors=True)
+        self.library = Library()
+        self.library.save(self._app_dir)
+        self._refresh()
+        self.status.setText("已清空。原始压缩包还在，可以重新导入。")
 
     # ---- 结束 ------------------------------------------------------------
 

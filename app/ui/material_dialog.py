@@ -69,9 +69,11 @@ class MaterialChoiceDialog(QDialog):
             )
             use_saved.clicked.connect(lambda: self._pick("configured"))
         pick = buttons.addButton(
-            "选择素材文件…", QDialogButtonBox.ButtonRole.AcceptRole
+            "打开材质管理…", QDialogButtonBox.ButtonRole.AcceptRole
         )
-        pick.clicked.connect(lambda: self._pick("pick"))
+        # 这个框只在"库里一个素材都没有"时出现；导入、启用、排序都在材质管理里做，
+        # 不要在这里另开一条"选某个文件"的路——那是我做管理界面之前的旧流程。
+        pick.clicked.connect(lambda: self._pick("manage"))
         none = buttons.addButton(
             "不用材质（白模）", QDialogButtonBox.ButtonRole.AcceptRole
         )
