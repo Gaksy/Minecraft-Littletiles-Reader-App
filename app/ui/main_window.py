@@ -31,6 +31,7 @@ from ..config import APP_DIR, AppConfig
 from ..job import ExportProgress, build_snbt_job, default_options, write_job
 from ..runner import ExportRunner
 from .export_dialog import ExportRegionDialog
+from .material_dialog import MaterialChoiceDialog
 from .theme import colors_for
 
 
@@ -158,26 +159,40 @@ class MainWindow(QMainWindow):
             return Path(self.config.library_cli)
         return paths.reader_executable()
 
-    def _ensure_assets(self) -> str:
-        """M1 还没有素材管理，先让用户指一个素材包目录并用配置记住。
+    def _choose_assets(self) -> str | None:
+        """问一句本次用什么材质。
 
-        选完就地校验：空目录/缺文件要当场说出来。之前只记路径不检查，
-        结果用户选了个空目录，导出的模型既没贴图也没普通方块，却只在日志里
-        留了一行没人注意的警告。
+        返回素材包路径；`""` = 不用材质（导出白模）；`None` = 用户取消。
+
+        为什么要问而不是直接用配置：第一次用的人手上通常什么都没有，
+        "不用材质"必须能一步选到，而不是被逼着去翻目录选择框。
         """
-        remembered = self.config.default_assets
-        if remembered and Path(remembered).is_dir():
-            report = lint_package(Path(remembered))
-            if report.ok:
-                for warning in report.warnings:
-                    self._log("素材包提示: %s" % warning)
-                return remembered
-            self._log("素材包不可用，需要重选：%s" % remembered)
+        configured = self.config.default_assets
+        if configured and not lint_package(Path(configured)).ok:
+            self._log("已配置的素材包不可用，请重新选择：%s" % configured)
+            configured = ""
+
+        dialog = MaterialChoiceDialog(configured, self)
+        if dialog.exec() != MaterialChoiceDialog.DialogCode.Accepted:
+            return None
+        if dialog.choice == "none":
+            self._log(
+                "本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。"
+            )
+            return ""
+        if dialog.choice == "configured" and configured:
+            for warning in lint_package(Path(configured)).warnings:
+                self._log("素材包提示: %s" % warning)
+            return configured
+        return self._pick_assets_folder()
+
+    def _pick_assets_folder(self) -> str | None:
+        """选一个素材包目录并校验；不可用就说明原因并拒绝记住。"""
         chosen = QFileDialog.getExistingDirectory(
             self, "选择素材包目录（含 block_textures.tsv 与 textures/）"
         )
         if not chosen:
-            return ""
+            return None
         report = lint_package(Path(chosen))
         if not report.ok:
             QMessageBox.warning(
@@ -187,7 +202,7 @@ class MainWindow(QMainWindow):
                 "素材包至少要包含 block_textures.tsv 与 textures/。\n"
                 "（需要导出普通方块的话还要 block_ids.tsv。）" % report.render(),
             )
-            return ""
+            return None
         if report.warnings:
             QMessageBox.information(self, "素材包可用，但有几点注意", report.render())
         self.config.default_assets = chosen
@@ -241,8 +256,8 @@ class MainWindow(QMainWindow):
         if not dialog.save_edit.text().strip():
             QMessageBox.warning(self, "缺少存档", "请先选择存档根目录。")
             return
-        assets = self._ensure_assets()
-        if not assets:
+        assets = self._choose_assets()
+        if assets is None:
             return
         root = self.config.resolved_output_dir()
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
@@ -259,8 +274,8 @@ class MainWindow(QMainWindow):
         )
         if not chosen:
             return
-        assets = self._ensure_assets()
-        if not assets:
+        assets = self._choose_assets()
+        if assets is None:
             return
         stem = Path(chosen).stem
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
