@@ -61,16 +61,29 @@ def build_package_from_vanilla(
     这里只做三件事——解析来源、调它、补上 block_ids.tsv。
     """
     source = Path(source)
+    resolved = resolve_source(source, work_dir, marker=VANILLA_MARKER)
+    return build_package_from_resolved(resolved.path, out_dir, resolved.note or "目录")
+
+
+def build_package_from_resolved(
+    package_root: Path,
+    out_dir: Path,
+    source_note: str = "目录",
+) -> PackageBuild:
+    """已经解压好（并已定位到包根）时走这条——避免为了探测再解压一遍。
+
+    一个 1.12.2 客户端 jar 解压要十几秒，解两次是白花的。
+    """
+    package_root = Path(package_root)
     # jar 的包根（含 assets/ 的那层）要留给生成端认"资源包布局"，
     # 而 --vanilla 要的是里面的 assets/minecraft。
-    resolved = resolve_source(source, work_dir, marker=VANILLA_MARKER)
-    minecraft_root = resolved.path / VANILLA_MARKER
+    minecraft_root = package_root / VANILLA_MARKER
     if not minecraft_root.is_dir():
         raise FileNotFoundError(
             "这个来源里没有 %s，看起来不是 Minecraft 客户端 jar：%s"
-            % (VANILLA_MARKER, source)
+            % (VANILLA_MARKER, package_root)
         )
-    pack_root = resolved.path   # 含 assets/ 的那层，生成端按它找包前缀
+    pack_root = package_root   # 含 assets/ 的那层，生成端按它找包前缀
 
     out_dir = Path(out_dir)
     if out_dir.exists():
@@ -85,7 +98,11 @@ def build_package_from_vanilla(
         "--pack", str(pack_root),
         "--out", str(out_dir),
     ]
-    done = subprocess.run(command, capture_output=True, text=True)
+    # 必须显式指定 utf-8：这些脚本输出的是中文，而 subprocess 的 text=True 默认
+    # 按系统 locale 解码（Windows 上可能是 cp1252），会直接把读取线程搞崩。
+    done = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     output = (done.stdout or "") + (done.stderr or "")
     if done.returncode != 0:
         raise RuntimeError("生成素材包失败：\n%s" % output.strip())
@@ -99,6 +116,6 @@ def build_package_from_vanilla(
 
     return PackageBuild(
         package_dir=out_dir,
-        source_note=resolved.note or "目录",
+        source_note=source_note,
         output=output.strip(),
     )

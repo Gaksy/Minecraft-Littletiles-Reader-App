@@ -9,7 +9,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QUrl, Qt
+from PySide6.QtCore import QEvent, QEventLoop, QThread, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QCheckBox,
     QVBoxLayout,
@@ -34,7 +35,7 @@ from ..config import APP_DIR, AppConfig
 from ..job import ExportProgress, build_snbt_job, default_options, write_job
 from ..runner import ExportRunner
 from ..sources import ARCHIVE_SUFFIXES, resolve_source
-from ..vanilla import build_package_from_vanilla, detect_kind
+from ..vanilla import build_package_from_resolved, detect_kind
 from .export_dialog import ExportRegionDialog
 from .material_dialog import MaterialChoiceDialog
 from .theme import colors_for
@@ -70,6 +71,54 @@ def open_directory(path: Path) -> bool:
     独立成函数，一是跨平台只在这一处，二是测试时可以替换掉，避免真弹窗口。
     """
     return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+class _PackageBuilder(QThread):
+    """在后台线程里解压并生成素材包。
+
+    这套活要几十秒（解 jar、解析 blockstates/models、挑贴图）。放在主线程里做，
+    界面会整段冻住、看着像死了——所以挪到线程里，主线程只负责转圈。
+    """
+
+    finished_with = Signal(object)   # PackageBuild，或捕到的 Exception
+
+    def __init__(self, source: Path, work: Path, out: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._source = source
+        self._work = work
+        self._out = out
+
+    def run(self) -> None:
+        """解压 → 认类型 → （是客户端 jar 就）生成素材包。
+
+        整段都在线程里：解压十几秒、生成二十几秒，放主线程界面会冻住。
+        """
+        try:
+            resolved = resolve_source(self._source, self._work)
+            kind = detect_kind(resolved.path)
+            self.progress_note = "识别为 %s" % kind
+            if kind != "vanilla":
+                self.finished_with.emit({"kind": kind, "note": resolved.note})
+                return
+            build = build_package_from_resolved(
+                resolved.path, self._out, resolved.note or "目录"
+            )
+            self.finished_with.emit({"kind": kind, "note": resolved.note, "build": build})
+        except Exception as error:      # 解压失败、脚本报错…都带回主线程处理
+            self.finished_with.emit(error)
+
+
+def busy_dialog(title: str, text: str, parent) -> QProgressDialog:
+    """不确定时长的进度框：一直在动，但不说"还剩多少"，因为确实不知道。"""
+    dialog = QProgressDialog(text, "", 0, 0, parent)
+    dialog.setWindowTitle(title)
+    dialog.setWindowModality(Qt.WindowModality.WindowModal)
+    dialog.setCancelButton(None)        # 中途取消会留下半个素材包，先不给取消
+    dialog.setMinimumDuration(0)
+    dialog.setAutoClose(False)
+    dialog.setAutoReset(False)
+    dialog.show()
+    return dialog
 
 
 class MainWindow(QMainWindow):
@@ -223,65 +272,104 @@ class MainWindow(QMainWindow):
         return self._build_assets_from_file(Path(chosen))
 
     def _build_assets_from_file(self, chosen: Path) -> str | None:
-        """解压 → 认类型 → 能处理就生成素材包。"""
+        """解压 → 认类型 → 能处理就生成素材包。
+
+        慢活全在后台线程里，主线程只负责转圈——不然四十秒的冻结会让用户以为卡死。
+        """
         work = APP_DIR / "cache" / "sources"
         self._log("导入素材文件: %s" % chosen)
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            resolved = resolve_source(chosen, work)
-            kind = detect_kind(resolved.path)
-            self._log("  %s（识别为 %s）" % (resolved.note or "已解压", kind))
+        out = APP_DIR / "resources" / "packages" / ("vanilla_" + chosen.stem)
+        builder = _PackageBuilder(chosen, work, out, self)
+        result: dict = {}
+        loop = QEventLoop()
 
-            if kind == "vanilla":
-                out = APP_DIR / "resources" / "packages" / ("vanilla_" + chosen.stem)
-                build = build_package_from_vanilla(chosen, work, out)
-                for line in build.output.splitlines()[-4:]:
-                    self._log("  " + line.strip())
-                report = lint_package(build.package_dir)
-                self._log(
-                    "  素材包: %d 方块 / %d 贴图 / 缺 %d"
-                    % (
-                        report.block_count,
-                        report.texture_ref_count,
-                        len(report.missing_textures),
-                    )
-                )
-                if not report.ok:
-                    QMessageBox.warning(self, "生成失败", report.render())
-                    return None
-                self.config.default_assets = str(build.package_dir)
-                self.config.save()
-                self._refresh_status()
-                return str(build.package_dir)
+        def finished(payload) -> None:
+            result["payload"] = payload
+            loop.quit()
 
-            if kind in ("resourcepack", "mod"):
-                QMessageBox.information(
-                    self,
-                    "这个文件还不能单独用",
-                    "识别为：%s\n\n"
-                    "它只有贴图，没有「哪个方块的哪一面用哪张图」的信息——那部分是"
-                    "原版模型定义的。所以它需要先有一个原版底子才能合并进来。\n\n"
-                    "现在可以先选你自己的 Minecraft 1.12.2 客户端 jar（"
-                    "versions\\1.12.2\\1.12.2.jar）生成素材包；"
-                    "资源包与模组的合并是后续步骤。"
-                    % ("资源包" if kind == "resourcepack" else "模组"),
-                )
-                return None
+        builder.finished_with.connect(finished)
+        dialog = busy_dialog(
+            "导入素材",
+            "正在解压并整理素材包…\n\n%s\n\n这一步要几十秒，请稍候。" % chosen.name,
+            self,
+        )
+        builder.start()
+        loop.exec()          # 嵌套事件循环：界面照常重绘，进度框一直在动
+        builder.wait()
+        dialog.close()
 
-            QMessageBox.warning(
-                self,
-                "认不出这个文件",
-                "解压后没找到 assets/minecraft，也不像资源包或模组。\n\n"
-                "如果是客户端 jar，请确认是 1.12.2 版本；"
-                "客户端的 assets/ 目录里没有贴图（那只有声音和语言）。",
-            )
+        payload = result.get("payload")
+        if isinstance(payload, Exception):
+            logger().exception("导入素材文件失败: %s", chosen, exc_info=payload)
+            QMessageBox.warning(self, "导入失败", str(payload))
             return None
-        except Exception as error:      # 解压失败、越界路径、脚本报错…
+        try:
+            return self._apply_import(payload)
+        except Exception as error:      # 兜底：别让界面卡在一个异常上
             logger().exception("导入素材文件失败: %s", chosen)
             QMessageBox.warning(self, "导入失败", str(error))
             return None
-        finally:
-            QApplication.restoreOverrideCursor()
+
+    def _apply_import(self, payload: dict) -> str | None:
+        """线程回来的结果落到界面与配置上。"""
+        kind = payload.get("kind", "unknown")
+        self._log("  %s（识别为 %s）" % (payload.get("note") or "已解压", kind))
+
+        if kind == "vanilla":
+            build = payload["build"]
+            for line in build.output.splitlines()[-4:]:
+                self._log("  " + line.strip())
+            report = lint_package(build.package_dir)
+            self._log(
+                "  素材包: %d 方块 / %d 贴图 / 缺 %d"
+                % (
+                    report.block_count,
+                    report.texture_ref_count,
+                    len(report.missing_textures),
+                )
+            )
+            if not report.ok:
+                QMessageBox.warning(self, "生成失败", report.render())
+                return None
+            self.config.default_assets = str(build.package_dir)
+            self.config.save()
+            self._refresh_status()
+            QMessageBox.information(
+                self,
+                "素材包已生成",
+                "已用你选择的文件生成素材包：\n%s\n\n%d 个方块 / %d 张贴图，缺失 %d 张。\n"
+                "已设为默认，之后导出直接用。"
+                % (
+                    build.package_dir,
+                    report.block_count,
+                    report.texture_ref_count,
+                    len(report.missing_textures),
+                ),
+            )
+            return str(build.package_dir)
+
+        if kind in ("resourcepack", "mod"):
+            QMessageBox.information(
+                self,
+                "这个文件还不能单独用",
+                "识别为：%s\n\n"
+                "它只有贴图，没有「哪个方块的哪一面用哪张图」的信息——那部分是"
+                "原版模型定义的。所以它需要先有一个原版底子才能合并进来。\n\n"
+                "现在可以先选你自己的 Minecraft 1.12.2 客户端 jar（"
+                "versions\\1.12.2\\1.12.2.jar）生成素材包；"
+                "资源包与模组的合并是后续步骤。"
+                % ("资源包" if kind == "resourcepack" else "模组"),
+            )
+            return None
+
+        QMessageBox.warning(
+            self,
+            "认不出这个文件",
+            "解压后没找到 assets/minecraft，也不像资源包或模组。\n\n"
+            "如果是客户端 jar，请确认是 1.12.2 版本；"
+            "客户端的 assets/ 目录里没有贴图（那只有声音和语言）。",
+        )
+        return None
 
     def _run(self, job: dict) -> None:
         """写 job、起进程。工作目录固定为应用目录，产物路径都从 job 里来。"""

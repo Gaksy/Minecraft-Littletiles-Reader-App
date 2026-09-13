@@ -148,7 +148,9 @@ def _extract_rar(archive: Path, target: Path) -> None:
         if shutil.which(command[0]) is None:
             continue
         tried.append(command[0])
-        done = subprocess.run(command, capture_output=True, text=True)
+        done = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if done.returncode == 0 and any(target.iterdir()):
             return
     raise RuntimeError(
