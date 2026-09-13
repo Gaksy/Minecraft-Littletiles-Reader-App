@@ -143,8 +143,14 @@ class ExportRegionDialog(QDialog):
             "color:%s;" % colors_for(self.palette()).muted.name()
         )
         right_layout.addWidget(self.summary)
-        right_layout.addStretch(1)
-        body.addLayout(right_layout, 1)
+
+        # 选项放在右列：说明图搬去独立窗口之后，这里原本空着一大块。
+        options_label = QLabel("选项")
+        options_label.setStyleSheet(
+            "color:%s;" % colors_for(self.palette()).muted.name()
+        )
+        right_layout.addSpacing(8)
+        right_layout.addWidget(options_label)
 
         self.plain_blocks = QCheckBox("同时导出普通方块")
         self.plain_blocks.setChecked(bool(self._initial.get("plain_blocks", True)))
@@ -155,7 +161,10 @@ class ExportRegionDialog(QDialog):
         self.normalize = QCheckBox("再把最长边缩放到 1 个单位（会改变真实尺寸）")
         self.normalize.setChecked(bool(self._initial.get("normalize_scale", False)))
         for box in (self.plain_blocks, self.cull, self.center, self.normalize):
-            root.addWidget(box)
+            right_layout.addWidget(box)
+
+        right_layout.addStretch(1)
+        body.addLayout(right_layout, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
