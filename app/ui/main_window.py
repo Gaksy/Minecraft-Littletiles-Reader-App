@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QUrl, Qt
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -32,6 +33,8 @@ from ..applog import logger
 from ..config import APP_DIR, AppConfig
 from ..job import ExportProgress, build_snbt_job, default_options, write_job
 from ..runner import ExportRunner
+from ..sources import ARCHIVE_SUFFIXES, resolve_source
+from ..vanilla import build_package_from_vanilla, detect_kind
 from .export_dialog import ExportRegionDialog
 from .material_dialog import MaterialChoiceDialog
 from .theme import colors_for
@@ -200,31 +203,85 @@ class MainWindow(QMainWindow):
             for warning in lint_package(Path(configured)).warnings:
                 self._log("素材包提示: %s" % warning)
             return configured
-        return self._pick_assets_folder()
+        return self._import_assets_file()
 
-    def _pick_assets_folder(self) -> str | None:
-        """选一个素材包目录并校验；不可用就说明原因并拒绝记住。"""
-        chosen = QFileDialog.getExistingDirectory(
-            self, "选择素材包目录（含 block_textures.tsv 与 textures/）"
+    def _import_assets_file(self) -> str | None:
+        """选一个 zip / rar / jar，应用自己判断是什么并整理成素材包。
+
+        只收压缩包，不收目录：用户手上拿到的是下载来的 zip、或游戏里的 jar，
+        不该要求他先凑出我们内部的目录格式。
+        """
+        patterns = " ".join("*%s" % s for s in ARCHIVE_SUFFIXES)
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 zip / rar / jar（Minecraft 1.12.2 客户端 jar 可直接生成素材包）",
+            "",
+            "压缩包 (%s);;所有文件 (*)" % patterns,
         )
         if not chosen:
             return None
-        report = lint_package(Path(chosen))
-        if not report.ok:
+        return self._build_assets_from_file(Path(chosen))
+
+    def _build_assets_from_file(self, chosen: Path) -> str | None:
+        """解压 → 认类型 → 能处理就生成素材包。"""
+        work = APP_DIR / "cache" / "sources"
+        self._log("导入素材文件: %s" % chosen)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            resolved = resolve_source(chosen, work)
+            kind = detect_kind(resolved.path)
+            self._log("  %s（识别为 %s）" % (resolved.note or "已解压", kind))
+
+            if kind == "vanilla":
+                out = APP_DIR / "resources" / "packages" / ("vanilla_" + chosen.stem)
+                build = build_package_from_vanilla(chosen, work, out)
+                for line in build.output.splitlines()[-4:]:
+                    self._log("  " + line.strip())
+                report = lint_package(build.package_dir)
+                self._log(
+                    "  素材包: %d 方块 / %d 贴图 / 缺 %d"
+                    % (
+                        report.block_count,
+                        report.texture_ref_count,
+                        len(report.missing_textures),
+                    )
+                )
+                if not report.ok:
+                    QMessageBox.warning(self, "生成失败", report.render())
+                    return None
+                self.config.default_assets = str(build.package_dir)
+                self.config.save()
+                self._refresh_status()
+                return str(build.package_dir)
+
+            if kind in ("resourcepack", "mod"):
+                QMessageBox.information(
+                    self,
+                    "这个文件还不能单独用",
+                    "识别为：%s\n\n"
+                    "它只有贴图，没有「哪个方块的哪一面用哪张图」的信息——那部分是"
+                    "原版模型定义的。所以它需要先有一个原版底子才能合并进来。\n\n"
+                    "现在可以先选你自己的 Minecraft 1.12.2 客户端 jar（"
+                    "versions\\1.12.2\\1.12.2.jar）生成素材包；"
+                    "资源包与模组的合并是后续步骤。"
+                    % ("资源包" if kind == "resourcepack" else "模组"),
+                )
+                return None
+
             QMessageBox.warning(
                 self,
-                "这个目录不是素材包",
-                "选中的目录不能用作素材包：\n\n%s\n\n"
-                "素材包至少要包含 block_textures.tsv 与 textures/。\n"
-                "（需要导出普通方块的话还要 block_ids.tsv。）" % report.render(),
+                "认不出这个文件",
+                "解压后没找到 assets/minecraft，也不像资源包或模组。\n\n"
+                "如果是客户端 jar，请确认是 1.12.2 版本；"
+                "客户端的 assets/ 目录里没有贴图（那只有声音和语言）。",
             )
             return None
-        if report.warnings:
-            QMessageBox.information(self, "素材包可用，但有几点注意", report.render())
-        self.config.default_assets = chosen
-        self.config.save()
-        self._refresh_status()
-        return chosen
+        except Exception as error:      # 解压失败、越界路径、脚本报错…
+            logger().exception("导入素材文件失败: %s", chosen)
+            QMessageBox.warning(self, "导入失败", str(error))
+            return None
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _run(self, job: dict) -> None:
         """写 job、起进程。工作目录固定为应用目录，产物路径都从 job 里来。"""

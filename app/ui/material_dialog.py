@@ -22,23 +22,25 @@ from PySide6.QtWidgets import (
 from .theme import colors_for
 
 HELP_TEXT = (
-    "想要方块带贴图，需要一个「素材包」目录，里面至少要有：\n"
-    "  · block_textures.tsv  —— 方块 → 六面贴图 的映射表\n"
-    "  · textures/           —— 对应的 PNG\n"
-    "  · block_ids.tsv       —— 没有它时普通方块只能导出白模\n"
+    "直接选一个 zip / rar / jar 文件即可，应用会自己认：\n"
     "\n"
-    "这些东西来自你自己的 Minecraft 1.12.2 客户端，通常在：\n"
+    "  · Minecraft 1.12.2 客户端 jar —— 直接生成素材包（推荐，一步到位）\n"
+    "  · 资源包 / 模组 —— 目前还不能单独用（见下）\n"
+    "\n"
+    "客户端 jar 在你自己的游戏目录里，通常在：\n"
     "\n"
     "    <.minecraft>\\versions\\1.12.2\\1.12.2.jar\n"
     "\n"
-    "这个 jar 本身就是个压缩包——用 WinRAR / 7-Zip 打开它，里面的\n"
-    "assets/minecraft/ 就是 blockstates、models、textures。\n"
+    "它本身就是个压缩包，里面 assets/minecraft/ 装着 blockstates、models、\n"
+    "textures——应用会解压、整理成素材包，只用你自己的游戏文件。\n"
     "\n"
     "注意：别去 <.minecraft>\\assets\\ 找。那里只有声音和语言文件；\n"
     "贴图是 1.13 之后才搬到那个目录的，1.12.2 一直放在 jar 里。\n"
     "\n"
+    "资源包（换皮 zip）和模组 jar 需要先有原版底子才能合并，属于后续步骤。\n"
+    "\n"
     "本工具不附带、也不提供这些素材的下载：贴图是 Mojang 的资源，随游戏分发。\n"
-    "不提供素材包也可以导出，那样得到的是没有贴图的白模。"
+    "不选素材也可以导出，那样得到的是没有贴图的白模。"
 )
 
 
@@ -75,7 +77,9 @@ class MaterialChoiceDialog(QDialog):
                 "用已配置的素材包", QDialogButtonBox.ButtonRole.AcceptRole
             )
             use_saved.clicked.connect(lambda: self._pick("configured"))
-        pick = buttons.addButton("选择素材包…", QDialogButtonBox.ButtonRole.AcceptRole)
+        pick = buttons.addButton(
+            "选择素材文件…", QDialogButtonBox.ButtonRole.AcceptRole
+        )
         pick.clicked.connect(lambda: self._pick("pick"))
         none = buttons.addButton(
             "不用材质（白模）", QDialogButtonBox.ButtonRole.AcceptRole

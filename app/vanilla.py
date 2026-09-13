@@ -26,6 +26,22 @@ BUNDLED_BLOCK_IDS = Path(__file__).resolve().parent / "data" / "block_ids.tsv"
 VANILLA_MARKER = "assets/minecraft"
 
 
+def detect_kind(root: Path) -> str:
+    """看看解出来的目录是什么东西，好告诉用户下一步能不能用。
+
+    目前只有 `vanilla` 这条路是打通了的（从客户端 jar 直接生成素材包）；
+    资源包与模组都要先有原版底子再合并，属于下一步。
+    """
+    if (root / "assets" / "minecraft" / "blockstates").is_dir():
+        return "vanilla"
+    if (root / "pack.mcmeta").is_file():
+        return "resourcepack"
+    assets = root / "assets"
+    if any(p.is_dir() for p in assets.glob("*")) if assets.is_dir() else False:
+        return "mod"
+    return "unknown"
+
+
 @dataclass
 class PackageBuild:
     package_dir: Path
