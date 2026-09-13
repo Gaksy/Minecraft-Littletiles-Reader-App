@@ -657,13 +657,19 @@ class MainWindow(QMainWindow):
                 % (event.get("x"), event.get("z"), event.get("index"), event.get("total"))
             )
         elif kind == "stage":
-            self._log("阶段: %s" % event.get("name"))
+            name = str(event.get("name", ""))
+            self._log("阶段: %s" % STAGE_LABELS.get(name, name))
+            if name in ("write", "mesh"):
+                # 区块读完了，接下来是建网格/写文件+烘焙贴图，可能很久。
+                # 进度条切到"不确定"模式，别停在 100% 让人以为卡死。
+                self.bar.setRange(0, 0)
         elif kind == "warning":
             self._log("警告: %s" % event.get("message"))
         elif kind == "error":
             self._log("错误: %s" % event.get("message"))
 
     def _on_finished(self, ok: bool, exit_code: int) -> None:
+        self.bar.setRange(0, 100)     # 从"不确定"模式切回来
         self.cancel.setEnabled(False)
         result = self.progress.result
         if ok and not self.progress.error:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEventLoop, QSize, QThread, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -34,6 +35,33 @@ from ..sources import ARCHIVE_SUFFIXES
 from .theme import colors_for
 
 ICON_SIZE = 32
+
+# 阶段名 → 给用户看的中文（库发的是 parse/mesh/write）
+STAGE_LABELS = {"parse": "解析", "mesh": "建网格", "write": "写出文件"}
+
+
+class _Importer(QThread):
+    """后台导入：解压一个客户端 jar 要十几秒，放主线程界面会冻住。
+
+    （之前这里漏了——我给"选文件"那条旧路径加过线程，后来素材入口换成材质管理，
+    管理界面里的导入是同步的，又把线程绕过去了。）
+    """
+
+    finished_with = Signal(object)   # Source，或捕到的 Exception
+
+    def __init__(self, chosen: Path, app_dir: Path, work: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._chosen = chosen
+        self._app_dir = app_dir
+        self._work = work
+
+    def run(self) -> None:
+        try:
+            self.finished_with.emit(
+                import_source(self._chosen, self._app_dir, self._work)
+            )
+        except Exception as error:
+            self.finished_with.emit(error)
 
 
 class MaterialManagerDialog(QDialog):
@@ -211,14 +239,37 @@ class MaterialManagerDialog(QDialog):
         if not chosen:
             return
         work = self._app_dir / "cache" / "sources"
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            source = import_source(Path(chosen), self._app_dir, work)
-        except Exception as error:
-            QMessageBox.warning(self, "导入失败", str(error))
+        progress = QProgressDialog(
+            "正在解压并识别…\n\n%s\n\n（客户端 jar 要十几秒）" % Path(chosen).name,
+            "", 0, 0, self,
+        )
+        progress.setWindowTitle("导入素材")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.show()
+
+        importer = _Importer(Path(chosen), self._app_dir, work, self)
+        result: dict = {}
+        loop = QEventLoop()
+
+        def finished(payload) -> None:
+            result["payload"] = payload
+            loop.quit()
+
+        importer.finished_with.connect(finished)
+        importer.start()
+        loop.exec()          # 嵌套事件循环：界面照常重绘
+        importer.wait()
+        progress.close()
+
+        payload = result.get("payload")
+        if isinstance(payload, Exception):
+            logger().exception("导入素材失败: %s", chosen)
+            QMessageBox.warning(self, "导入失败", str(payload))
             return
-        finally:
-            QApplication.restoreOverrideCursor()
+        source = payload
+        logger().info("导入素材: %s（识别为 %s）", chosen, source.kind)
         self.library.add(source)
         # 原版直接启用（它是底，不启用没用）；其余留给用户决定顺序
         if source.kind == "vanilla" and not self.library.selected():
