@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -29,14 +29,31 @@ from ..config import APP_DIR, AppConfig
 from ..job import ExportProgress, build_snbt_job, default_options, write_job
 from ..runner import ExportRunner
 from .export_dialog import ExportRegionDialog
+from .theme import colors_for
 
-BIG_BUTTON_STYLE = """
-QPushButton {
+
+def big_button_style(palette) -> str:
+    """两个大入口的样式。
+
+    颜色从调色板取——写死 `#ffffff` 的话，深色模式下就是白底浅字。
+    """
+    colors = colors_for(palette)
+    return """
+QPushButton {{
     font-size: 18px; padding: 26px 18px; border-radius: 10px;
-    border: 1px solid #cbd5e1; background: #ffffff; text-align: center;
-}
-QPushButton:hover { background: #f1f5f9; border-color: #94a3b8; }
-"""
+    border: 1px solid {border}; background: {surface};
+    color: {text}; text-align: center;
+}}
+QPushButton:hover {{ background: {hover}; border-color: {accent}; }}
+QPushButton:disabled {{ color: {muted}; }}
+""".format(
+        border=colors.border.name(),
+        surface=colors.surface.name(),
+        text=colors.text.name(),
+        hover=colors.surface_hover.name(),
+        accent=colors.accent_strong.name(),
+        muted=colors.muted.name(),
+    )
 
 
 class MainWindow(QMainWindow):
@@ -67,7 +84,6 @@ class MainWindow(QMainWindow):
         self.btn_snbt = QPushButton("导出 SNBT\n（结构文件 / 粘贴文本）")
         self.btn_region = QPushButton("导出存档\n（选区块导出 OBJ）")
         for button in (self.btn_snbt, self.btn_region):
-            button.setStyleSheet(BIG_BUTTON_STYLE)
             buttons.addWidget(button, 1)
         layout.addLayout(buttons)
         self.btn_snbt.clicked.connect(self._export_snbt)
@@ -77,9 +93,10 @@ class MainWindow(QMainWindow):
             "两个入口都是快速导出：不绑定项目、不记录历史。"
             "项目管理在 M2 提供。"
         )
-        self.hint.setStyleSheet("color:#6b7280;")
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
+        # 等两个控件都建好了再上色（它俩的样式都从调色板来）
+        self._apply_button_style()
 
         row = QHBoxLayout()
         self.bar = QProgressBar()
@@ -98,6 +115,17 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.status = self.statusBar()
+
+    def _apply_button_style(self) -> None:
+        style = big_button_style(self.palette())
+        for button in (self.btn_snbt, self.btn_region):
+            button.setStyleSheet(style)
+        self.hint.setStyleSheet("color: %s;" % colors_for(self.palette()).muted.name())
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.PaletteChange:
+            self._apply_button_style()
+        super().changeEvent(event)
 
     def _refresh_status(self) -> None:
         cli = self._cli_path()

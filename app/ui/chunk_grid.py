@@ -6,11 +6,12 @@ M4 会再把"导出过没有"的三态着色叠上来。
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QFont, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ..job import ChunkRange
+from .theme import Colors, colors_for
 
 CELL = 26          # 每格的像素边长
 BASE_SPAN = 9      # 至少显示 9×9 格，选中范围更大时自动扩展
@@ -65,7 +66,9 @@ class ChunkGrid(QWidget):
 
     def paintEvent(self, _event: object) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#fcfcfd"))
+        # 颜色一律取自调色板：深色模式下才不会出现白底浅字
+        colors: Colors = colors_for(self.palette())
+        painter.fillRect(self.rect(), colors.surface)
         span = self._span()
         ox, oz = self._origin()
 
@@ -75,7 +78,7 @@ class ChunkGrid(QWidget):
             rect = QRectF(
                 (cx - ox) * CELL, (cz - oz) * CELL, CELL, CELL
             )
-            painter.fillRect(rect, QColor("#93c5fd"))
+            painter.fillRect(rect, colors.accent)
 
         # 中心格单独加深
         if self._center in selected:
@@ -85,16 +88,16 @@ class ChunkGrid(QWidget):
                 CELL,
                 CELL,
             )
-            painter.fillRect(rect, QColor("#2563eb"))
+            painter.fillRect(rect, colors.accent_strong)
 
         # 网格线
-        painter.setPen(QPen(QColor("#dcdcdc"), 1))
+        painter.setPen(QPen(colors.border, 1))
         for i in range(span + 1):
             painter.drawLine(i * CELL, 0, i * CELL, span * CELL)
             painter.drawLine(0, i * CELL, span * CELL, i * CELL)
 
         # 选择范围的粗边框
-        painter.setPen(QPen(QColor("#2563eb"), 2))
+        painter.setPen(QPen(colors.accent_strong, 2))
         painter.drawRect(
             QRectF(
                 (self._range.min_x - ox) * CELL,
@@ -107,10 +110,10 @@ class ChunkGrid(QWidget):
         # 悬停格：坐标提示
         if self._hover is not None:
             hx, hz = self._hover
-            painter.setPen(QPen(QColor("#9ca3af"), 1, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(colors.muted, 1, Qt.PenStyle.DashLine))
             painter.drawRect(QRectF((hx - ox) * CELL, (hz - oz) * CELL, CELL, CELL))
             painter.setFont(QFont("", 8))
-            painter.setPen(QColor("#6b7280"))
+            painter.setPen(colors.muted)
             painter.drawText(
                 QRectF(0, 0, self.width(), 16),
                 Qt.AlignmentFlag.AlignLeft,
@@ -119,7 +122,7 @@ class ChunkGrid(QWidget):
 
         # 原点提示（0,0 在视野内时画个十字）
         if ox <= 0 < ox + span and oz <= 0 < oz + span:
-            painter.setPen(QPen(QColor("#f59e0b"), 1))
+            painter.setPen(QPen(colors.marker, 1))
             cx = (0 - ox) * CELL + CELL / 2
             cz = (0 - oz) * CELL + CELL / 2
             painter.drawLine(int(cx - 6), int(cz), int(cx + 6), int(cz))
@@ -139,3 +142,9 @@ class ChunkGrid(QWidget):
         cell = self._cell_at(event.position())
         if cell is not None:
             self.cellClicked.emit(*cell)
+
+    def changeEvent(self, event: QEvent) -> None:
+        # 系统切换深浅色时，Qt 会发 PaletteChange；重画一次即可跟上
+        if event.type() == QEvent.Type.PaletteChange:
+            self.update()
+        super().changeEvent(event)
