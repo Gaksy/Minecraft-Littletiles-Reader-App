@@ -261,7 +261,16 @@ def build(pack_path, vanilla, out_dir, use_pack_models):
             missing += 1
             missing_names.append(rel)
 
-    shutil.copyfile(vanilla / "block_ids.tsv", out_dir / "block_ids.tsv")
+    # block_ids.tsv 是我们自己生成的文件（数字 ID → 方块名），**从客户端 jar 直接
+    # 解出来的原版素材里没有它**。缺了不该让整条流程失败：它只影响普通方块能否
+    # 带贴图，几何照样导出（白模）。以前这里无条件 copyfile，于是"从 jar 生成
+    # 素材包"这条路会在最后一步崩掉。
+    block_ids = vanilla / "block_ids.tsv"
+    if block_ids.is_file():
+        shutil.copyfile(block_ids, out_dir / "block_ids.tsv")
+    else:
+        print("  提示：原版素材里没有 block_ids.tsv（它由 tools/generate_block_id_table.py "
+              "从 minecraft-data 生成）。产物不含它，普通方块仍会导出但没有贴图。")
     (out_dir / "pack-source.txt").write_text(
         "材质包：%s\n包内根目录：%s\n模型叠加：%s\n"
         % (pack_path, pack.prefix or "(包根)", "是" if use_pack_models else "否"),
