@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import colors_for
+from .widgets import wrap
 
 HELP_TEXT = (
     "<b>原版材质</b><br>"
@@ -51,14 +52,14 @@ class MaterialChoiceDialog(QDialog):
 
         if configured:
             label = QLabel("上次使用：\n%s" % configured)
-            label.setWordWrap(True)
+            wrap(label)
             label.setStyleSheet("color:%s;" % colors.muted.name())
             layout.addWidget(label)
 
         hint = QLabel(HELP_TEXT)
         # 上面的文案带了 <b>/<br>，显式声明富文本，别指望自动识别
         hint.setTextFormat(Qt.TextFormat.RichText)
-        hint.setWordWrap(True)
+        wrap(hint)
         hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         layout.addWidget(hint, 1)
 

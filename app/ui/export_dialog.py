@@ -41,6 +41,7 @@ from ..job import (
 )
 from .theme import colors_for
 from .illustration_dialog import IllustrationDialog
+from .widgets import wrap
 
 
 class ExportRegionDialog(QDialog):
@@ -56,11 +57,14 @@ class ExportRegionDialog(QDialog):
         parent: QWidget | None = None,
         initial: dict | None = None,
         show_help_on_open: bool = False,
+        initial_save: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("导出存档模型")
         self._config = config
         self._initial = dict(initial or {})
+        # 项目模式要把"这个项目默认的存档"填进去，而不是全局最近用过的那个
+        self._initial_save = initial_save
         self._build_ui()
         self._sync()
         # 固定大小：所有行始终在位（不适用的只是置灰），内容高度是确定的，
@@ -76,9 +80,7 @@ class ExportRegionDialog(QDialog):
 
         # 存档根目录（含 level.dat，不是 region 目录）
         save_row = QHBoxLayout()
-        self.save_edit = QLineEdit(
-            self._config.recent_saves[0] if self._config.recent_saves else ""
-        )
+        self.save_edit = QLineEdit(self._initial_save or self._default_save())
         self.save_edit.setPlaceholderText("存档根目录（含 level.dat 的那个文件夹）")
         browse = QPushButton("浏览…")
         browse.clicked.connect(self._pick_save)
@@ -138,7 +140,7 @@ class ExportRegionDialog(QDialog):
         right_layout.addWidget(self.help_button)
 
         self.summary = QLabel()
-        self.summary.setWordWrap(True)
+        wrap(self.summary)
         self.summary.setStyleSheet(
             "color:%s;" % colors_for(self.palette()).muted.name()
         )
@@ -179,6 +181,9 @@ class ExportRegionDialog(QDialog):
         box = QSpinBox()
         box.setRange(low, high)
         return box
+
+    def _default_save(self) -> str:
+        return self._config.recent_saves[0] if self._config.recent_saves else ""
 
     # ---- 交互 ------------------------------------------------------------
 

@@ -1,12 +1,17 @@
-"""启动界面：两个大入口 + 导出进度与日志。
+"""启动界面：项目列表 + 两个大入口（快速导出）+ 导出进度与日志。
 
-M1 只做"快速导出"这条路（不绑定项目、不留记录）；项目模式在 M2。
+两种用法在这一页并存，各自的取舍也写在界面上：
+
+* **快速导出**（两个大按钮）：不绑定项目、不留记录，产物落在默认输出目录；
+* **项目模式**（下面的卡片）：素材副本、历史记录、贴图库、区块查询都在项目里，
+  点一张卡片就开一个新的项目窗口（`project_window.py`）。
+
+进度、取消、打开输出目录、日志用同一个 `ExportPanel`——主界面与项目界面只此一份。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-import json
 import subprocess
 from pathlib import Path
 
@@ -19,11 +24,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
-    QProgressBar,
     QProgressDialog,
     QPushButton,
-    QCheckBox,
     QVBoxLayout,
     QWidget,
 )
@@ -33,17 +35,21 @@ from ltgen.lint import lint_package
 
 from ..applog import logger
 from ..config import APP_DIR, AppConfig
-from ..job import ExportProgress, build_snbt_job, default_options, write_job
-from ..runner import ExportRunner
+from ..job import build_snbt_job, default_options
+from ..project import Project
 from ..sources import ARCHIVE_SUFFIXES, resolve_source
 from ..compose import ComposeError, compose
 from ..library import Library
 from ..vanilla import build_package_from_resolved, detect_kind
+from .export_panel import ExportPanel
 from .export_dialog import ExportRegionDialog
 from .material_dialog import MaterialChoiceDialog
 from .material_manager import MaterialManagerDialog
 from .illustration_dialog import IllustrationDialog
+from .project_list import ProjectListWidget
+from .project_window import ProjectWindow
 from .theme import colors_for
+from .widgets import wrap
 
 
 def big_button_style(palette) -> str:
@@ -165,22 +171,51 @@ class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.setWindowTitle("LittleTiles Reader")
-        self.resize(880, 640)
+        self.resize(980, 760)
         self.config = config
-        self.progress = ExportProgress()
-        self._last_output_dir: Path | None = None
         self._library_version = ""   # 由 start 事件带回
-        self.runner = ExportRunner(self)
-        self.runner.event.connect(self._on_event)
-        self.runner.output_line.connect(self._log)
-        self.runner.finished.connect(self._on_finished)
+        # 打开的项目窗口留一份引用：不然会被 GC 掉，看起来就是"一闪而过"
+        self._project_windows: list[ProjectWindow] = []
+        # 进度、日志、取消、打开输出目录都在面板里：项目界面用的是同一块，
+        # "写文件阶段切不确定进度"这类修正只需要改一处。
+        # open_directory / QMessageBox 按**本模块的名字**注入，测试替换本模块的
+        # 同名对象就能拦住真实弹窗。
+        self.panel = ExportPanel(
+            config,
+            APP_DIR,
+            self,
+            open_directory=open_directory,
+            message_box=QMessageBox,
+        )
+        self.panel.library_version.connect(self._on_library_version)
+        # 兼容旧调用点（测试与部分代码直接用 window.runner / window.progress）
+        self.runner = self.panel.runner
+        self.bar = self.panel.bar
+        self.cancel = self.panel.cancel
+        self.open_output = self.panel.open_output
+        self.log = self.panel.log_view
         self._build_ui()
         self._refresh_status()
+        self.panel.log_view.setMaximumHeight(120)   # 日志别把上面的内容挤没了
         # 启动时把"这次是在什么环境下跑的"记进会话日志，排错第一眼就看这些
         cli = self._cli_path()
         logger().info("库 CLI: %s（存在=%s）", cli, Path(cli).is_file())
         logger().info("默认素材包: %s", self.config.default_assets or "（未设置）")
         logger().info("默认输出目录: %s", self.config.resolved_output_dir())
+
+    # ---- 兼容层 ----------------------------------------------------------
+
+    @property
+    def progress(self):
+        return self.panel.progress
+
+    @property
+    def _last_output_dir(self) -> Path | None:
+        return self.panel.last_output_dir
+
+    @_last_output_dir.setter
+    def _last_output_dir(self, value: Path | None) -> None:
+        self.panel.last_output_dir = value
 
     # ---- 界面 ------------------------------------------------------------
 
@@ -202,33 +237,21 @@ class MainWindow(QMainWindow):
         self.btn_region.clicked.connect(self._export_region)
 
         self.hint = QLabel(
-            "两个入口都是快速导出：不绑定项目、不记录历史。"
-            "项目管理在 M2 提供。"
+            "上面两个是快速导出：不绑定项目、不记录历史。"
+            "想留记录、留素材副本、以后还能查「哪块导过」，就用下面的项目。"
         )
-        self.hint.setWordWrap(True)
+        wrap(self.hint)
         layout.addWidget(self.hint)
 
         # 等两个控件都建好了再上色（它俩的样式都从调色板来）
         self._apply_button_style()
 
-        row = QHBoxLayout()
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 100)
-        self.cancel = QPushButton("取消")
-        self.cancel.setEnabled(False)
-        self.cancel.clicked.connect(self.runner.cancel)
-        self.open_output = QPushButton("打开输出目录")
-        self.open_output.setEnabled(False)
-        self.open_output.clicked.connect(self._open_last_output)
-        row.addWidget(self.bar, 1)
-        row.addWidget(self.open_output)
-        row.addWidget(self.cancel)
-        layout.addLayout(row)
+        self.projects = ProjectListWidget(self.config, self)
+        self.projects.opened.connect(self._open_project)
+        layout.addWidget(self.projects, 1)
 
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setPlaceholderText("导出日志会显示在这里")
-        layout.addWidget(self.log, 1)
+        # 进度、取消、打开输出目录、日志 = 一块面板（主界面与项目界面共用）
+        layout.addWidget(self.panel, 0)
 
         self.setCentralWidget(central)
         self.status = self.statusBar()
@@ -364,6 +387,33 @@ class MainWindow(QMainWindow):
 
     def _show_help(self) -> None:
         IllustrationDialog(self).exec()
+
+    # ---- 项目 ------------------------------------------------------------
+
+    def _open_project(self, directory: str) -> None:
+        """点开一张项目卡片：开一个新窗口，项目的一切都在那里面。"""
+        project = Project.load(directory)
+        if project is None:
+            QMessageBox.warning(
+                self,
+                "项目读不出来",
+                "这个目录里读不到 project.json：\n%s\n\n"
+                "如果项目被搬到别处，用卡片上的「重新定位…」。" % directory,
+            )
+            self.projects.refresh()
+            return
+        self.config.register_project(project.path)
+        self.config.last_project = str(project.path)
+        self.config.save()
+        window = ProjectWindow(project, self.config, APP_DIR, self)
+        window.closed.connect(lambda: self._forget_project_window(window))
+        self._project_windows.append(window)
+        window.show()
+        window.raise_()
+
+    def _forget_project_window(self, window: "ProjectWindow") -> None:
+        self._project_windows = [w for w in self._project_windows if w is not window]
+        self.projects.refresh()
 
     def _show_about(self) -> None:
         from .. import __version__
@@ -528,47 +578,7 @@ class MainWindow(QMainWindow):
 
     def _run(self, job: dict) -> None:
         """写 job、起进程。工作目录固定为应用目录，产物路径都从 job 里来。"""
-        if self.runner.is_running:
-            return
-        cli = self._cli_path()
-        if not Path(cli).is_file():
-            QMessageBox.warning(self, "找不到库", "找不到 LittleTilesReader：\n%s" % cli)
-            return
-        stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        job_path = APP_DIR / "tmp" / ("job_%s.json" % stamp)
-        write_job(job, job_path)
-        # 只有它能完整还原"这次到底跑的是什么"——tmp/ 里的 job 文件会被后来的运行挤掉，
-        # 所以原文也进会话日志。
-        logger().info(
-            "job 原文 (%s):\n%s",
-            job_path,
-            json.dumps(job, ensure_ascii=False, indent=2),
-        )
-        self._last_output_dir = Path(job["output"]["dir"])
-        self.open_output.setEnabled(True)
-        self.progress = ExportProgress()
-        self.bar.setValue(0)
-        self.log.clear()
-        self._log("运行: %s --job %s --progress json" % (cli, job_path))
-        self._log("输出: %s" % job["output"]["dir"])
-        # 把本次选项写进日志：用户怀疑"某个开关没生效"时，先看这一行。
-        options = job.get("options") or {}
-        if options:
-            names = {
-                "plain_blocks": "普通方块",
-                "cull_hidden_faces": "剔除遮挡面",
-                "center": "居中",
-                "normalize_scale": "单位缩放",
-            }
-            self._log(
-                "选项: "
-                + "  ".join(
-                    "%s=%s" % (names.get(k, k), "是" if v else "否")
-                    for k, v in options.items()
-                )
-            )
-        self.cancel.setEnabled(True)
-        self.runner.start(cli, job_path, APP_DIR)
+        self.panel.run(job, self._cli_path())
 
     # ---- 两个入口 --------------------------------------------------------
 
@@ -628,104 +638,26 @@ class MainWindow(QMainWindow):
     # ---- 进度与日志 ------------------------------------------------------
 
     def _log(self, text: str) -> None:
-        """界面日志与文件日志同源：屏幕上看到的每一行都带时间戳落到会话日志里。"""
-        self.log.appendPlainText(text)
-        logger().info(text)
+        self.panel.log_line(text)
 
     def _on_event(self, event: dict) -> None:
-        self.progress.apply(event)
-        self.bar.setValue(self.progress.percent)
-        kind = event.get("event")
-        if kind == "assets":
-            self._log(
-                "素材包: %s 个方块 / %s 张贴图 / 缺 %s"
-                % (event.get("blocks"), event.get("textures"), event.get("missing"))
-            )
-        elif kind == "start":
-            library = event.get("library")
-            if library:
-                # 记下是哪个版本的库在干活：产物出问题时这是第一条线索
-                self._library_version = str(library)
-                self._refresh_status()
-            self._log(
-                "开始：%s，%s 个区块（库 %s）"
-                % (event.get("mode"), event.get("chunks"), library or "?")
-            )
-        elif kind == "chunk":
-            self._log(
-                "  区块 (%s, %s)  %s/%s"
-                % (event.get("x"), event.get("z"), event.get("index"), event.get("total"))
-            )
-        elif kind == "stage":
-            name = str(event.get("name", ""))
-            self._log("阶段: %s" % STAGE_LABELS.get(name, name))
-            if name in ("write", "mesh"):
-                # 区块读完了，接下来是建网格/写文件+烘焙贴图，可能很久。
-                # 进度条切到"不确定"模式，别停在 100% 让人以为卡死。
-                self.bar.setRange(0, 0)
-        elif kind == "warning":
-            self._log("警告: %s" % event.get("message"))
-        elif kind == "error":
-            self._log("错误: %s" % event.get("message"))
+        self.panel.apply_event(event)
 
     def _on_finished(self, ok: bool, exit_code: int) -> None:
-        self.bar.setRange(0, 100)     # 从"不确定"模式切回来
-        self.cancel.setEnabled(False)
-        result = self.progress.result
-        if ok and not self.progress.error:
-            self.bar.setValue(100)
-            self._log(
-                "完成：%s 面 / %s 顶点 / %s 材质 / %s 贴图，耗时 %ss"
-                % (
-                    result.get("faces"),
-                    result.get("vertices"),
-                    result.get("materials"),
-                    result.get("textures_written"),
-                    result.get("seconds"),
-                )
-            )
-            self._log("产物: %s" % result.get("obj"))
-            self._offer_open_output(self._output_dir_of(result))
-        else:
-            self.bar.setValue(0)
-            self._log("失败（退出码 %d）" % exit_code)
+        self.panel.handle_finished(ok, exit_code)
         self.raise_()
+
+    def _on_library_version(self, version: str) -> None:
+        self._library_version = version
+        self._refresh_status()
 
     # ---- 输出目录 --------------------------------------------------------
 
     def _output_dir_of(self, result: dict) -> Path | None:
-        """优先用产物所在目录；拿不到就退回 job 里指定的那个。"""
-        obj = result.get("obj")
-        if obj:
-            return Path(str(obj)).parent
-        return self._last_output_dir
+        return self.panel.output_dir_of(result)
 
     def _open_last_output(self) -> None:
-        if self._last_output_dir is not None and self._last_output_dir.is_dir():
-            open_directory(self._last_output_dir)
+        self.panel.open_last_output()
 
     def _offer_open_output(self, directory: Path | None) -> None:
-        """导出完成后问一句要不要打开。可以在配置里关掉（勾选一次即可）。"""
-        if directory is None or not self.config.ask_open_output:
-            return
-        if not directory.is_dir():
-            # 目录都没了（用户挪走/删掉）就不问了
-            return
-
-        box = QMessageBox(self)
-        box.setWindowTitle("导出完成")
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setText("导出完成。")
-        box.setInformativeText("要打开输出目录吗？\n%s" % directory)
-        box.setStandardButtons(
-            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Close
-        )
-        box.setDefaultButton(QMessageBox.StandardButton.Open)
-        never = QCheckBox("以后不再询问")
-        box.setCheckBox(never)
-
-        if box.exec() == QMessageBox.StandardButton.Open:
-            open_directory(directory)
-        if never.isChecked():
-            self.config.ask_open_output = False
-            self.config.save()
+        self.panel.offer_open_output(directory)

@@ -28,6 +28,7 @@ class AppConfig:
     recent_saves: list[str] = field(default_factory=list)
     recent_snbt: list[str] = field(default_factory=list)
     projects: list[dict] = field(default_factory=list)  # 项目登记表（M2 用）
+    last_project: str = ""                              # 最近打开的项目目录
     last_export: dict = field(default_factory=dict)     # 上次的导出选项，作为下次默认
     ask_open_output: bool = True                        # 导出完成后是否询问打开目录
     shown_chunk_help: bool = False                      # 区块选择说明是否已经自动弹过一次
@@ -64,6 +65,36 @@ class AppConfig:
 
     def resolved_output_dir(self) -> Path:
         return Path(self.output_dir) if self.output_dir else APP_DIR / "outputs"
+
+    # ---- 项目登记表 ------------------------------------------------------
+    #
+    # 项目目录是用户自己挑的，所以"项目列表"不能靠扫目录树——登记表在配置里，
+    # 而项目内的 `project.json` 是权威：读得到就以它为准（项目可能被搬过地方）。
+
+    def project_paths(self) -> list[str]:
+        """登记的项目目录，按登记顺序（列表里的顺序就是界面上的顺序）。"""
+        result: list[str] = []
+        for item in self.projects:
+            path = item.get("path") if isinstance(item, dict) else str(item)
+            if path and path not in result:
+                result.append(path)
+        return result
+
+    def register_project(self, path: Path | str) -> None:
+        text = str(Path(path))
+        if text in self.project_paths():
+            return
+        self.projects.append({"path": text})
+
+    def unregister_project(self, path: Path | str) -> None:
+        text = str(Path(path))
+        self.projects = [
+            item
+            for item in self.projects
+            if (item.get("path") if isinstance(item, dict) else str(item)) != text
+        ]
+        if self.last_project == text:
+            self.last_project = ""
 
 
 def _bump(items: list[str], value: str) -> list[str]:

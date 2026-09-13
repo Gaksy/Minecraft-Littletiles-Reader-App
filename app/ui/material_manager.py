@@ -33,6 +33,7 @@ from ..library import KIND_LABELS, Library, import_source
 from ..applog import logger
 from ..sources import ARCHIVE_SUFFIXES
 from .theme import colors_for
+from .widgets import wrap
 
 ICON_SIZE = 32
 
@@ -87,7 +88,7 @@ class MaterialManagerDialog(QDialog):
             "下面的会覆盖上面的同名贴图。"
         )
         hint.setTextFormat(Qt.TextFormat.RichText)
-        hint.setWordWrap(True)
+        wrap(hint)
         hint.setStyleSheet("color:%s;" % muted)
         root.addWidget(hint)
 
