@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ltgen import paths
+from ltgen.lint import lint_package
 
 from ..config import APP_DIR, AppConfig
 from ..job import ExportProgress, build_snbt_job, default_options, write_job
@@ -154,14 +155,37 @@ class MainWindow(QMainWindow):
         return paths.reader_executable()
 
     def _ensure_assets(self) -> str:
-        """M1 还没有素材管理，先让用户指一个素材包目录并用配置记住。"""
-        if self.config.default_assets and Path(self.config.default_assets).is_dir():
-            return self.config.default_assets
+        """M1 还没有素材管理，先让用户指一个素材包目录并用配置记住。
+
+        选完就地校验：空目录/缺文件要当场说出来。之前只记路径不检查，
+        结果用户选了个空目录，导出的模型既没贴图也没普通方块，却只在日志里
+        留了一行没人注意的警告。
+        """
+        remembered = self.config.default_assets
+        if remembered and Path(remembered).is_dir():
+            report = lint_package(Path(remembered))
+            if report.ok:
+                for warning in report.warnings:
+                    self._log("素材包提示: %s" % warning)
+                return remembered
+            self._log("素材包不可用，需要重选：%s" % remembered)
         chosen = QFileDialog.getExistingDirectory(
             self, "选择素材包目录（含 block_textures.tsv 与 textures/）"
         )
         if not chosen:
             return ""
+        report = lint_package(Path(chosen))
+        if not report.ok:
+            QMessageBox.warning(
+                self,
+                "这个目录不是素材包",
+                "选中的目录不能用作素材包：\n\n%s\n\n"
+                "素材包至少要包含 block_textures.tsv 与 textures/。\n"
+                "（需要导出普通方块的话还要 block_ids.tsv。）" % report.render(),
+            )
+            return ""
+        if report.warnings:
+            QMessageBox.information(self, "素材包可用，但有几点注意", report.render())
         self.config.default_assets = chosen
         self.config.save()
         self._refresh_status()

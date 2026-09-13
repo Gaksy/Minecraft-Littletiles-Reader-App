@@ -197,4 +197,13 @@ def lint_package(package_dir: Path, max_examples: int = MAX_EXAMPLES) -> Package
             % (len(table.tint_pairs()), TINT_NAME)
         )
 
+    # 数字 ID 表：纹理不需要它，但**导出存档的普通方块需要**
+    # （存档里存的是数字 ID，库靠它反查方块名）。缺了不会报错，只会默默
+    # 不导出普通方块 —— 所以必须在这里说出来。
+    if not (package_dir / "block_ids.tsv").is_file():
+        report.warnings.append(
+            "缺 block_ids.tsv：贴图导出不受影响，但**导出存档时不会包含普通方块**"
+            "（这个文件由 tools/generate_block_id_table.py 生成）"
+        )
+
     return report
