@@ -8,8 +8,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QEvent, QUrl, Qt
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QCheckBox,
     QVBoxLayout,
     QWidget,
 )
@@ -56,6 +57,14 @@ QPushButton:disabled {{ color: {muted}; }}
     )
 
 
+def open_directory(path: Path) -> bool:
+    """用系统默认的文件管理器打开目录（Windows 资源管理器 / macOS 访达）。
+
+    独立成函数，一是跨平台只在这一处，二是测试时可以替换掉，避免真弹窗口。
+    """
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -63,6 +72,7 @@ class MainWindow(QMainWindow):
         self.resize(880, 640)
         self.config = config
         self.progress = ExportProgress()
+        self._last_output_dir: Path | None = None
         self.runner = ExportRunner(self)
         self.runner.event.connect(self._on_event)
         self.runner.output_line.connect(self._log)
@@ -104,7 +114,11 @@ class MainWindow(QMainWindow):
         self.cancel = QPushButton("取消")
         self.cancel.setEnabled(False)
         self.cancel.clicked.connect(self.runner.cancel)
+        self.open_output = QPushButton("打开输出目录")
+        self.open_output.setEnabled(False)
+        self.open_output.clicked.connect(self._open_last_output)
         row.addWidget(self.bar, 1)
+        row.addWidget(self.open_output)
         row.addWidget(self.cancel)
         layout.addLayout(row)
 
@@ -164,6 +178,8 @@ class MainWindow(QMainWindow):
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         job_path = APP_DIR / "tmp" / ("job_%s.json" % stamp)
         write_job(job, job_path)
+        self._last_output_dir = Path(job["output"]["dir"])
+        self.open_output.setEnabled(True)
         self.progress = ExportProgress()
         self.bar.setValue(0)
         self.log.clear()
@@ -259,7 +275,47 @@ class MainWindow(QMainWindow):
                 )
             )
             self._log("产物: %s" % result.get("obj"))
+            self._offer_open_output(self._output_dir_of(result))
         else:
             self.bar.setValue(0)
             self._log("失败（退出码 %d）" % exit_code)
         self.raise_()
+
+    # ---- 输出目录 --------------------------------------------------------
+
+    def _output_dir_of(self, result: dict) -> Path | None:
+        """优先用产物所在目录；拿不到就退回 job 里指定的那个。"""
+        obj = result.get("obj")
+        if obj:
+            return Path(str(obj)).parent
+        return self._last_output_dir
+
+    def _open_last_output(self) -> None:
+        if self._last_output_dir is not None and self._last_output_dir.is_dir():
+            open_directory(self._last_output_dir)
+
+    def _offer_open_output(self, directory: Path | None) -> None:
+        """导出完成后问一句要不要打开。可以在配置里关掉（勾选一次即可）。"""
+        if directory is None or not self.config.ask_open_output:
+            return
+        if not directory.is_dir():
+            # 目录都没了（用户挪走/删掉）就不问了
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("导出完成")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("导出完成。")
+        box.setInformativeText("要打开输出目录吗？\n%s" % directory)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Close
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Open)
+        never = QCheckBox("以后不再询问")
+        box.setCheckBox(never)
+
+        if box.exec() == QMessageBox.StandardButton.Open:
+            open_directory(directory)
+        if never.isChecked():
+            self.config.ask_open_output = False
+            self.config.save()
