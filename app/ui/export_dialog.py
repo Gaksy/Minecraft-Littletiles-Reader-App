@@ -87,7 +87,6 @@ class ExportRegionDialog(QDialog):
 
         grid_row = QHBoxLayout()
         self.grid = ChunkGrid()
-        self.grid.cellClicked.connect(self._on_cell_clicked)
         grid_row.addWidget(self.grid)
         side = QVBoxLayout()
         self.summary = QLabel()
@@ -139,21 +138,6 @@ class ExportRegionDialog(QDialog):
         if chosen:
             self.save_edit.setText(chosen)
 
-    def _on_cell_clicked(self, x: int, z: int) -> None:
-        mode = self.mode.currentData()
-        if mode == "range":
-            # 点两下就是范围：第一次设起点，第二次设终点（终点未设时同步成同一点）
-            if self.x1.value() == self.x2.value() and self.z1.value() == self.z2.value():
-                self.x2.setValue(x)
-                self.z2.setValue(z)
-            else:
-                self.x1.setValue(x)
-                self.z1.setValue(z)
-        else:
-            self.x.setValue(x)
-            self.z.setValue(z)
-        self._sync()
-
     def _mode_visibility(self, mode: str) -> None:
         """按模式只留下相关的输入框，避免用户对着无关项发愣。"""
         for widget in (self.x, self.z):
@@ -169,7 +153,9 @@ class ExportRegionDialog(QDialog):
         center = (self.x.value(), self.z.value())
         self.grid.set_selection(center, selection)
         self.summary.setText(
-            "共 %d 个区块\nx: %d … %d\nz: %d … %d"
+            "共 %d 个区块\nx: %d … %d\nz: %d … %d\n\n"
+            "左图只是示意：每个小格 = 1 个区块，粗框 = 本次导出的范围；\n"
+            "范围由左侧输入框决定。"
             % (
                 selection.total,
                 selection.min_x,
@@ -177,7 +163,6 @@ class ExportRegionDialog(QDialog):
                 selection.min_z,
                 selection.min_z + selection.count_z - 1,
             )
-            + ("\n\n点击网格可改中心" if mode != "range" else "\n\n点击网格设起点 / 终点")
         )
 
     # ---- 结果 ------------------------------------------------------------

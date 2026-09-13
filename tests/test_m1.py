@@ -114,7 +114,13 @@ def test_gui_export() -> None:
 
     application = QApplication.instance() or QApplication([])
     with tempfile.TemporaryDirectory(prefix="lt-m1-") as tmp:
-        config = AppConfig(library_cli=str(paths.reader_executable()), default_assets=str(assets))
+        config = AppConfig(
+            library_cli=str(paths.reader_executable()),
+            default_assets=str(assets),
+            # 关掉"导出完成后询问是否打开目录"：离屏模式下那个对话框会真的等人点，
+            # 测试就会一直挂着。
+            ask_open_output=False,
+        )
         window = MainWindow(config)
         out_dir = Path(tmp) / "out"
         job = build_region_job(

@@ -1,13 +1,14 @@
-"""区块选择网格：俯视图，每格一个区块（16×16 方块）。
+"""区块范围示意：俯视图，每格一个区块（16×16 方块）。
 
-三种选择模式（见 docs/chunk-selection-modes.svg）都在这一个控件里表达；
-M4 会再把"导出过没有"的三态着色叠上来。
+**这是示例图，不是选择控件**——用户不在这里点选，坐标由旁边的输入框决定，
+这块只负责把"将要导出哪一片"画出来（粗框），以及三种模式的区别
+（见 docs/chunk-selection-modes.svg）。M4 会再把"导出过没有"的三态着色叠上来。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtCore import QEvent, QRectF, Qt
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ..job import ChunkRange
@@ -18,16 +19,12 @@ BASE_SPAN = 9      # 至少显示 9×9 格，选中范围更大时自动扩展
 
 
 class ChunkGrid(QWidget):
-    """点击某格 = 把它设为中心（`cellClicked`）。"""
-
-    cellClicked = Signal(int, int)
+    """只读的示意控件：显示当前选择范围，不接受点击。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._center = (0, 0)
         self._range = ChunkRange(0, 0, 1, 1)
-        self._hover: tuple[int, int] | None = None
-        self.setMouseTracking(True)
         self.setMinimumSize(BASE_SPAN * CELL + 1, BASE_SPAN * CELL + 1)
 
     def set_selection(self, center: tuple[int, int], selection: ChunkRange) -> None:
@@ -52,15 +49,6 @@ class ChunkGrid(QWidget):
             self._center[0] - span // 2,
             self._center[1] - span // 2,
         )
-
-    def _cell_at(self, pos: QPointF) -> tuple[int, int] | None:
-        span = self._span()
-        ox, oz = self._origin()
-        dx = int(pos.x() // CELL)
-        dz = int(pos.y() // CELL)
-        if 0 <= dx < span and 0 <= dz < span:
-            return (ox + dx, oz + dz)
-        return None
 
     # ---- 绘制 ------------------------------------------------------------
 
@@ -107,19 +95,6 @@ class ChunkGrid(QWidget):
             )
         )
 
-        # 悬停格：坐标提示
-        if self._hover is not None:
-            hx, hz = self._hover
-            painter.setPen(QPen(colors.muted, 1, Qt.PenStyle.DashLine))
-            painter.drawRect(QRectF((hx - ox) * CELL, (hz - oz) * CELL, CELL, CELL))
-            painter.setFont(QFont("", 8))
-            painter.setPen(colors.muted)
-            painter.drawText(
-                QRectF(0, 0, self.width(), 16),
-                Qt.AlignmentFlag.AlignLeft,
-                "  (%d, %d)" % (hx, hz),
-            )
-
         # 原点提示（0,0 在视野内时画个十字）
         if ox <= 0 < ox + span and oz <= 0 < oz + span:
             painter.setPen(QPen(colors.marker, 1))
@@ -127,21 +102,6 @@ class ChunkGrid(QWidget):
             cz = (0 - oz) * CELL + CELL / 2
             painter.drawLine(int(cx - 6), int(cz), int(cx + 6), int(cz))
             painter.drawLine(int(cx), int(cz - 6), int(cx), int(cz + 6))
-
-    # ---- 交互 ------------------------------------------------------------
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        self._hover = self._cell_at(event.position())
-        self.update()
-
-    def leaveEvent(self, _event: object) -> None:
-        self._hover = None
-        self.update()
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        cell = self._cell_at(event.position())
-        if cell is not None:
-            self.cellClicked.emit(*cell)
 
     def changeEvent(self, event: QEvent) -> None:
         # 系统切换深浅色时，Qt 会发 PaletteChange；重画一次即可跟上
