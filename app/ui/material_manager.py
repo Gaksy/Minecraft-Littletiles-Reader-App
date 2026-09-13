@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt
@@ -246,8 +247,6 @@ class MaterialManagerDialog(QDialog):
             != QMessageBox.StandardButton.Yes
         ):
             return
-        import shutil
-
         for source_id in ids:
             source = self.library.by_id(source_id)
             if source is None:
@@ -276,10 +275,14 @@ class MaterialManagerDialog(QDialog):
             != QMessageBox.StandardButton.Yes
         ):
             return
-        for child in ("sources", "packages", "icons"):
-            target = self._app_dir / ("cache" if child != "sources" else "resources") / child
+        # 解压出来的素材、组合结果、图标缩略图、以及解压过程中的中间目录
+        for target in (
+            self._app_dir / "resources" / "sources",
+            self._app_dir / "cache" / "packages",
+            self._app_dir / "cache" / "icons",
+            self._app_dir / "cache" / "sources",
+        ):
             shutil.rmtree(target, ignore_errors=True)
-        shutil.rmtree(self._app_dir / "cache" / "packages", ignore_errors=True)
         self.library = Library()
         self.library.save(self._app_dir)
         self._refresh()
