@@ -170,6 +170,11 @@ class MainWindow(QMainWindow):
         )
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
+
+        # 想改素材才进这里；不改就一直沿用上次的选择（走缓存）
+        self.btn_materials = QPushButton("材质管理…")
+        self.btn_materials.clicked.connect(self._open_materials)
+        layout.addWidget(self.btn_materials)
         # 等两个控件都建好了再上色（它俩的样式都从调色板来）
         self._apply_button_style()
 
@@ -231,12 +236,15 @@ class MainWindow(QMainWindow):
         return paths.reader_executable()
 
     def _choose_assets(self) -> str | None:
-        """打开材质管理 → 按启用顺序组合 → 返回组合好的素材包。
+        """决定这次用哪套素材：**默认沿用上次的选择**，走缓存。
 
         返回素材包路径；`""` = 不用材质（白模）；`None` = 用户取消。
 
         用户面对的是"素材列表"而不是"选一个目录/文件"：导入、启用、排序都在材质
         管理里做，这里只把右列的顺序变成实际可用的素材包。
+
+        非项目模式下不该每次都逼用户过一遍列表——选择记在库里，这次直接用；
+        要改就点主界面的「材质管理…」。组合按顺序指纹缓存，没变就是毫秒级命中。
         """
         library = Library.load(APP_DIR)
         if not library.sources:
@@ -248,17 +256,23 @@ class MainWindow(QMainWindow):
                 self._log("本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。")
                 return ""
 
-        manager = MaterialManagerDialog(APP_DIR, self)
-        if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
-            return None
-        if not manager.library.selected():
-            self._log("未启用任何素材：本次导出白模。")
-            return ""
+        if not library.selected():
+            # 有素材但一个都没启用 → 才需要打开管理界面
+            manager = MaterialManagerDialog(APP_DIR, self)
+            if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
+                return None
+            library = manager.library
+            if not library.selected():
+                self._log("未启用任何素材：本次导出白模。")
+                return ""
+        else:
+            self._log(
+                "沿用上次的素材选择：%s" % " → ".join(s.name for s in library.selected())
+            )
 
-        self._log("按启用顺序组合素材…")
         progress = busy_dialog("材质组合", "正在按启用顺序组合素材…", self)
         try:
-            composed = compose(APP_DIR, manager.library)
+            composed = compose(APP_DIR, library)
         except ComposeError as error:
             QMessageBox.warning(self, "组合不了", str(error))
             return None
@@ -277,6 +291,18 @@ class MainWindow(QMainWindow):
             )
         )
         return str(composed.package_dir)
+
+    def _open_materials(self) -> None:
+        """管理素材（导入 / 启用 / 排序）。改完下次导出自动生效。"""
+        manager = MaterialManagerDialog(APP_DIR, self)
+        if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
+            return
+        chosen = manager.library.selected()
+        self._log(
+            "素材选择已更新：%s"
+            % (" → ".join(s.name for s in chosen) if chosen else "（无，导出白模）")
+        )
+        self._refresh_status()
 
     def _import_assets_file(self) -> str | None:
         """选一个 zip / rar / jar，应用自己判断是什么并整理成素材包。
