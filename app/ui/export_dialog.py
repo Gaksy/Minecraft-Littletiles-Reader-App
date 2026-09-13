@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from typing import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -42,6 +43,11 @@ from ..job import (
 from .theme import colors_for
 from .illustration_dialog import IllustrationDialog
 from .widgets import wrap
+from .chunk_grid import ChunkStateGrid
+
+# 这个对话框里只放得下一小块，格子画小一点、单边最多 16 格
+GRID_CELL = 12
+GRID_MAX = 16
 
 
 class ExportRegionDialog(QDialog):
@@ -58,6 +64,7 @@ class ExportRegionDialog(QDialog):
         initial: dict | None = None,
         show_help_on_open: bool = False,
         initial_save: str = "",
+        state_provider: Callable[[str, str, int, int], tuple] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("导出存档模型")
@@ -65,6 +72,9 @@ class ExportRegionDialog(QDialog):
         self._initial = dict(initial or {})
         # 项目模式要把"这个项目默认的存档"填进去，而不是全局最近用过的那个
         self._initial_save = initial_save
+        # 项目模式会把"这个区块导过没有"的数据源传进来（§6 的预览网格）
+        self._state_provider = state_provider
+        self._grid_key: tuple | None = None
         self._build_ui()
         self._sync()
         # 固定大小：所有行始终在位（不适用的只是置灰），内容高度是确定的，
@@ -103,6 +113,7 @@ class ExportRegionDialog(QDialog):
         self.dimension = QComboBox()
         for value in DIMENSIONS:
             self.dimension.addItem(DIMENSION_LABELS[value], value)
+        self.dimension.currentIndexChanged.connect(self._sync)
         form.addRow("维度", self.dimension)
 
         self.mode = QComboBox()
@@ -118,6 +129,9 @@ class ExportRegionDialog(QDialog):
         self.radius = self._spin(low=0, high=64)
         self.x1, self.z1 = self._spin(), self._spin()
         self.x2, self.z2 = self._spin(), self._spin()
+        # 数字框也要接上：不然改了坐标，"本次：共 N 个区块"和预览网格还是旧值
+        for widget in (self.x, self.z, self.radius, self.x1, self.z1, self.x2, self.z2):
+            widget.valueChanged.connect(self._sync)
         form.addRow("中心 / 单块 x", self.x)
         form.addRow("中心 / 单块 z", self.z)
         form.addRow("半径 r", self.radius)
@@ -130,6 +144,20 @@ class ExportRegionDialog(QDialog):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.addLayout(form)
+        # 项目模式下：这里画出"这几块导过没有"（灰/绿/黄），配一行图例
+        self.state_grid = ChunkStateGrid(cell=GRID_CELL, max_cells=GRID_MAX)
+        self.grid_legend = QLabel(
+            "灰 = 从未导出　绿 = 已导出且存档未变　黄 = 已导出但之后存档变过"
+        )
+        self.grid_legend.setStyleSheet(
+            "color:%s;" % colors_for(self.palette()).muted.name()
+        )
+        if self._state_provider is None:
+            self.grid_legend.setText("（项目模式下这里会显示每个区块导出过没有）")
+            self.state_grid.setVisible(False)
+        left_layout.addSpacing(8)
+        left_layout.addWidget(self.state_grid)
+        left_layout.addWidget(self.grid_legend)
         left_layout.addStretch(1)
         body.addWidget(left)
 
@@ -217,6 +245,42 @@ class ExportRegionDialog(QDialog):
                 selection.min_z + selection.count_z - 1,
             )
         )
+        self._update_state_grid(selection)
+
+    def _update_state_grid(self, selection) -> None:
+        """把"导过没有"画出来。数据源没给就什么都不做。
+
+        只在范围/存档/维度真的变了时才重算：这块每次改动都会跑一遍文件系统查询，
+        范围一大就不便宜（大范围只画左上角那一块，见 ChunkStateGrid 的上限）。
+        """
+        if self._state_provider is None:
+            return
+        key = (
+            self.save_edit.text().strip(),
+            self.dimension.currentData(),
+            selection.min_x,
+            selection.min_z,
+            selection.count_x,
+            selection.count_z,
+        )
+        if key == self._grid_key:
+            return
+        self._grid_key = key
+        world = key[0]
+        rows = min(selection.count_z, GRID_MAX)
+        columns = min(selection.count_x, GRID_MAX)
+        cells: dict = {}
+        if world and Path(world).is_dir():
+            for row in range(rows):
+                for column in range(columns):
+                    x = selection.min_x + column
+                    z = selection.min_z + row
+                    cells[(x, z)] = self._state_provider(world, key[1], x, z)
+        self.state_grid.set_area(
+            selection.min_x, selection.min_z, selection.count_x, selection.count_z,
+            cells,
+        )
+        self.state_grid.setVisible(True)
 
     # ---- 结果 ------------------------------------------------------------
 

@@ -1172,6 +1172,14 @@ class ProjectWindow(QMainWindow):
 
     # ---- 导出 ------------------------------------------------------------
 
+    def _chunk_state_for_dialog(self, world: str, dimension: str, x: int, z: int):
+        """给导出对话框的预览网格用：这个区块导过没有、什么时候导的。"""
+        state, record = self.store.chunk_state(world, dimension, x, z)
+        detail = "导出于 %s" % record.created_at if record is not None else ""
+        if record is not None and state != "fresh":
+            detail += "，存档此后已修改"
+        return state, detail
+
     def _export_region(self) -> None:
         if self.panel.runner.is_running:
             return
@@ -1180,6 +1188,7 @@ class ProjectWindow(QMainWindow):
             self,
             initial=self.project.options or self.config.last_export,
             initial_save=self.project.save_root,
+            state_provider=self._chunk_state_for_dialog,
         )
         if dialog.exec() != ExportRegionDialog.DialogCode.Accepted:
             return

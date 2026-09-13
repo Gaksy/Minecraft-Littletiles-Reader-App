@@ -230,6 +230,48 @@ def test_retention(tmp: Path) -> None:
           sorted(plan.victims) == ["r0", "r1"], str(plan.victims))
 
 
+def test_export_dialog_grid(tmp: Path) -> None:
+    """导出对话框里的预览网格：哪些区块导过，导出那一刻就该看见（§6）。"""
+    print("导出对话框的区块预览：")
+    from app.ui.export_dialog import ExportRegionDialog
+
+    world = tmp / "世界"
+    (world / "region").mkdir(parents=True)
+    (world / "region" / "r.0.0.mca").write_bytes(b"x" * 100)
+    config = AppConfig()
+    config.save = lambda path=None: tmp / "app.json"
+
+    def provider(_world, _dimension, x, z):
+        if (x, z) == (0, 0):
+            return "fresh", "导出于 2026-09-14 01:00:00"
+        return "missing", ""
+
+    dialog = ExportRegionDialog(
+        config, None, initial_save=str(world), state_provider=provider
+    )
+    dialog.mode.setCurrentIndex(2)      # center
+    dialog.radius.setValue(1)
+    dialog.show()
+    QApplication.instance().processEvents()
+    grid = dialog.state_grid
+    check("预览网格显示出来了", grid.isVisible())
+    check("中心那块是已导出", grid.cells.get((0, 0), ("", ""))[0] == "fresh",
+          str(grid.cells.get((0, 0))))
+    check("旁边的块是未导出", grid.cells.get((1, 1), ("", ""))[0] == "missing")
+    check("3×3 的范围没被截断", grid.truncated is False)
+    dialog.radius.setValue(40)          # 81×81 → 只画左上角
+    dialog._sync()
+    check("范围过大时标注被截断", grid.truncated is True)
+    dialog.close()
+
+    plain = ExportRegionDialog(config)
+    plain.show()
+    QApplication.instance().processEvents()
+    check("快速导出不画网格（没有索引可用）", not plain.state_grid.isVisible())
+    check("并说明原因", "项目模式" in plain.grid_legend.text())
+    plain.close()
+
+
 def test_retention_ui(tmp: Path) -> None:
     print("按策略清理（离屏）：")
     project = Project.create(tmp / "retention-demo", "保留演示")
@@ -518,6 +560,7 @@ def main() -> int:
         test_texture_library(root / "t3")
         test_retention(root / "t4a")
         test_retention_ui(root / "t4b")
+        test_export_dialog_grid(root / "t4c")
         test_window(root / "t4")
         test_real_export(root / "t5", seen)
     print("弹窗：")

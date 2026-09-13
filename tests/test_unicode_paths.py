@@ -73,8 +73,12 @@ def find_region_source(data_root: Path) -> Path | None:
     return None
 
 
-def run_job(executable: Path, job_path: Path) -> tuple[int, dict, dict]:
-    """跑一次库 CLI，返回 (退出码, done 事件, start 事件)。"""
+def run_job(executable: Path, job_path: Path) -> tuple[int, dict, dict, str]:
+    """跑一次库 CLI，返回 (退出码, done 事件, start 事件, stderr)。
+
+    带上 stderr：这条链路偶尔会整体失败（退出码非 0、done 事件为空），
+    只报"失败"没法查——当时那一次就是这么过去的。
+    """
     result = subprocess.run(
         [str(executable), "--job", str(job_path), "--progress", "json"],
         capture_output=True,
@@ -93,7 +97,7 @@ def run_job(executable: Path, job_path: Path) -> tuple[int, dict, dict]:
             continue
     done = next((e for e in events if e.get("event") == "done"), {})
     start = next((e for e in events if e.get("event") == "start"), {})
-    return result.returncode, done, start
+    return result.returncode, done, start, (result.stderr or "").strip()
 
 
 def check_products(out_dir: Path, name: str, label: str) -> None:
@@ -160,8 +164,12 @@ def main() -> int:
             options=default_options(),
         )
         job_path = write_job(job, temp_dir / "job" / "region.json")
-        code, done, start = run_job(executable, job_path)
-        check("子进程正常结束", code == 0, "exit=%d" % code)
+        code, done, start, stderr = run_job(executable, job_path)
+        check(
+            "子进程正常结束",
+            code == 0,
+            "exit=%d%s" % (code, ("\n      " + stderr) if stderr else ""),
+        )
         check("读到了存档里的区块", done.get("chunks_found", 0) > 0 and not done.get("chunks_missing", 1),
               "found=%s missing=%s" % (done.get("chunks_found"), done.get("chunks_missing")))
         check("素材包被认下来（有材质）", done.get("materials", 0) > 0, str(done.get("materials")))
@@ -187,8 +195,12 @@ def main() -> int:
                 options=default_options(),
             )
             job_path = write_job(job, temp_dir / "job" / "snbt.json")
-            code, done, _ = run_job(executable, job_path)
-            check("子进程正常结束", code == 0, "exit=%d" % code)
+            code, done, _, stderr = run_job(executable, job_path)
+            check(
+                "子进程正常结束",
+                code == 0,
+                "exit=%d%s" % (code, ("\n      " + stderr) if stderr else ""),
+            )
             check("结构被解析出了网格", done.get("meshes", 0) > 0, str(done.get("meshes")))
             check_products(snbt_out, "中文结构", "结构导出")
 

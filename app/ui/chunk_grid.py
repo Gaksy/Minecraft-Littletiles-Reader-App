@@ -26,12 +26,23 @@ STATE_COLORS = {
 
 
 class ChunkStateGrid(QWidget):
-    """一个区块范围的状态图。`cells` 是 {(x, z): (状态, 提示)}。"""
+    """一个区块范围的状态图。`cells` 是 {(x, z): (状态, 提示)}。
+
+    格子大小与"单边最多画几格"可调：导出对话框里要放进一小块地方（12px × 16 格），
+    查询窗口里可以画大一点（22px × 32 格）。
+    """
 
     hovered = Signal(int, int, str)     # x, z, 提示（-1/-1 表示离开）
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        cell: int = CELL,
+        max_cells: int = MAX_CELLS,
+    ) -> None:
         super().__init__(parent)
+        self._cell = cell
+        self._max_cells = max_cells
         self._min_x = 0
         self._min_z = 0
         self._count_x = 0
@@ -52,20 +63,32 @@ class ChunkStateGrid(QWidget):
         self._requested = (count_x, count_z)
         self._min_x = min_x
         self._min_z = min_z
-        self._count_x = min(count_x, MAX_CELLS)
-        self._count_z = min(count_z, MAX_CELLS)
+        self._count_x = min(count_x, self._max_cells)
+        self._count_z = min(count_z, self._max_cells)
         self._cells = cells
-        self.setFixedSize(self._count_x * CELL + 2, self._count_z * CELL + 2)
+        self.setFixedSize(
+            self._count_x * self._cell + 2, self._count_z * self._cell + 2
+        )
         self.update()
 
     @property
     def truncated(self) -> bool:
         return self._requested != (self._count_x, self._count_z)
 
+    @property
+    def cells(self) -> dict:
+        """画出来的那些格子的状态（测试与将来的"点了哪一格"都用它）。"""
+        return dict(self._cells)
+
     def _cell_rect(self, x: int, z: int) -> QRectF:
         column = x - self._min_x
         row = z - self._min_z
-        return QRectF(1 + column * CELL, 1 + row * CELL, CELL - 2, CELL - 2)
+        return QRectF(
+            1 + column * self._cell,
+            1 + row * self._cell,
+            self._cell - 2,
+            self._cell - 2,
+        )
 
     def _state_of(self, x: int, z: int) -> str:
         found = self._cells.get((x, z))
@@ -90,8 +113,8 @@ class ChunkStateGrid(QWidget):
         painter.end()
 
     def _hit(self, pos_x: float, pos_y: float) -> tuple[int, int]:
-        column = int((pos_x - 1) // CELL)
-        row = int((pos_y - 1) // CELL)
+        column = int((pos_x - 1) // self._cell)
+        row = int((pos_y - 1) // self._cell)
         if 0 <= column < self._count_x and 0 <= row < self._count_z:
             return self._min_x + column, self._min_z + row
         return -1, -1
