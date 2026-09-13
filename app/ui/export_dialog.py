@@ -78,6 +78,9 @@ class ExportRegionDialog(QDialog):
         self._grid_key: tuple | None = None
         self._build_ui()
         self._sync()
+        # 像素字体比系统字体宽，列太窄会把右侧摘要截断；给一个下限宽度，
+        # 两列（左：区块参数 / 右：状态图 + 选项）才都放得下。
+        self.setMinimumWidth(820)
         # 固定大小：所有行始终在位（不适用的只是置灰），内容高度是确定的，
         # 没理由让用户拖出一个空一半的窗口。
         self.layout().setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
@@ -175,6 +178,8 @@ class ExportRegionDialog(QDialog):
         self.summary = QLabel()
         wrap(self.summary)
         design.set_role(self.summary, "hint")
+        # 摘要一行就是"共 N 个区块 x a…b z c…d"，窄了会被截断成半句
+        self.summary.setMinimumWidth(360)
         right_layout.addWidget(self.summary)
 
         # 选项放在右列：说明图搬去独立窗口之后，这里原本空着一大块。
