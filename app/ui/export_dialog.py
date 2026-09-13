@@ -40,6 +40,7 @@ from ..job import (
     default_options,
     expand_chunks,
 )
+from ..savefolder import inspect as inspect_save
 from .theme import colors_for
 from .illustration_dialog import IllustrationDialog
 from .widgets import wrap
@@ -99,6 +100,12 @@ class ExportRegionDialog(QDialog):
         save_row.addWidget(browse)
         root.addLayout(save_row)
         self.save_edit.textChanged.connect(self._sync)
+
+        # 选完路径当场说清楚对不对：选错目录的表现是"导出 0 个区块"，
+        # 只看结果很难反推是自己选错了一层
+        self.save_status = QLabel()
+        wrap(self.save_status)
+        root.addWidget(self.save_status)
 
         body = QHBoxLayout()
         root.addLayout(body, 1)
@@ -233,6 +240,7 @@ class ExportRegionDialog(QDialog):
         for widget in (self.x1, self.z1, self.x2, self.z2):
             widget.setEnabled(mode == "range")
 
+        self._sync_save_status()
         selection = self.selection()
         self.summary.setText(
             "本次：共 %d 个区块　x %d … %d　z %d … %d\n"
@@ -246,6 +254,21 @@ class ExportRegionDialog(QDialog):
             )
         )
         self._update_state_grid(selection)
+
+    def _sync_save_status(self) -> None:
+        """存档目录选对没有——选错一层是最常见、也最难自查的错误。"""
+        colors = colors_for(self.palette())
+        result = inspect_save(self.save_edit.text(), self.dimension.currentData())
+        if result.ok:
+            text = "✓ %s" % result.message
+            color = colors.accent_strong
+        else:
+            text = "！%s" % result.message
+            if result.hint:
+                text += "　%s" % result.hint
+            color = colors.marker
+        self.save_status.setText(text)
+        self.save_status.setStyleSheet("color:%s;" % color.name())
 
     def _update_state_grid(self, selection) -> None:
         """把"导过没有"画出来。数据源没给就什么都不做。

@@ -255,6 +255,8 @@ def test_export_dialog_grid(tmp: Path) -> None:
     QApplication.instance().processEvents()
     grid = dialog.state_grid
     check("预览网格显示出来了", grid.isVisible())
+    check("对话框认得出这是个合法存档", dialog.save_status.text().startswith("✓"),
+          dialog.save_status.text())
     check("中心那块是已导出", grid.cells.get((0, 0), ("", ""))[0] == "fresh",
           str(grid.cells.get((0, 0))))
     check("旁边的块是未导出", grid.cells.get((1, 1), ("", ""))[0] == "missing")
@@ -270,6 +272,36 @@ def test_export_dialog_grid(tmp: Path) -> None:
     check("快速导出不画网格（没有索引可用）", not plain.state_grid.isVisible())
     check("并说明原因", "项目模式" in plain.grid_legend.text())
     plain.close()
+
+
+def test_save_inspection(tmp: Path) -> None:
+    """选错存档目录的表现是"导出 0 个区块"，很难自查——所以要当场说清楚。"""
+    print("存档目录检查：")
+    from app.savefolder import inspect
+
+    good = tmp / "存档A"
+    (good / "region").mkdir(parents=True)
+    (good / "level.dat").write_bytes(b"x")
+    for name in ("r.0.0.mca", "r.0.1.mca"):
+        (good / "region" / name).write_bytes(b"x")
+    result = inspect(good)
+    check("正常存档 → 认下来", result.ok and result.mca_count == 2, result.message)
+    check("说清楚有几个 .mca", "2 个 .mca" in result.message)
+
+    inner = inspect(good / "region")
+    check("选到 region/ 里面 → 提示往上退一层",
+          not inner.ok and "往上退一层" in inner.hint, inner.hint)
+
+    saves = tmp / "saves"
+    (saves / "存档B" / "region").mkdir(parents=True)
+    (saves / "存档B" / "level.dat").write_bytes(b"x")
+    outer = inspect(saves)
+    check("选到 saves/ 这一层 → 指出大概想选哪个",
+          not outer.ok and "存档B" in outer.hint, outer.hint)
+
+    check("空目录 → 不算存档", not inspect(tmp).ok)
+    check("不存在的路径 → 直接说", not inspect(tmp / "没有这个").ok)
+    check("维度对不上就没区块", inspect(good, "nether").mca_count == 0)
 
 
 def test_retention_ui(tmp: Path) -> None:
@@ -561,6 +593,7 @@ def main() -> int:
         test_retention(root / "t4a")
         test_retention_ui(root / "t4b")
         test_export_dialog_grid(root / "t4c")
+        test_save_inspection(root / "t4d")
         test_window(root / "t4")
         test_real_export(root / "t5", seen)
     print("弹窗：")
