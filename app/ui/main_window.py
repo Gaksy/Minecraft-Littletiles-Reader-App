@@ -6,6 +6,7 @@ M1 只做"快速导出"这条路（不绑定项目、不留记录）；项目模
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QUrl, Qt
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 from ltgen import paths
 from ltgen.lint import lint_package
 
+from ..applog import logger
 from ..config import APP_DIR, AppConfig
 from ..job import ExportProgress, build_snbt_job, default_options, write_job
 from ..runner import ExportRunner
@@ -82,6 +84,11 @@ class MainWindow(QMainWindow):
         self.runner.finished.connect(self._on_finished)
         self._build_ui()
         self._refresh_status()
+        # 启动时把"这次是在什么环境下跑的"记进会话日志，排错第一眼就看这些
+        cli = self._cli_path()
+        logger().info("库 CLI: %s（存在=%s）", cli, Path(cli).is_file())
+        logger().info("默认素材包: %s", self.config.default_assets or "（未设置）")
+        logger().info("默认输出目录: %s", self.config.resolved_output_dir())
 
     # ---- 界面 ------------------------------------------------------------
 
@@ -230,6 +237,13 @@ class MainWindow(QMainWindow):
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         job_path = APP_DIR / "tmp" / ("job_%s.json" % stamp)
         write_job(job, job_path)
+        # 只有它能完整还原"这次到底跑的是什么"——tmp/ 里的 job 文件会被后来的运行挤掉，
+        # 所以原文也进会话日志。
+        logger().info(
+            "job 原文 (%s):\n%s",
+            job_path,
+            json.dumps(job, ensure_ascii=False, indent=2),
+        )
         self._last_output_dir = Path(job["output"]["dir"])
         self.open_output.setEnabled(True)
         self.progress = ExportProgress()
@@ -314,7 +328,9 @@ class MainWindow(QMainWindow):
     # ---- 进度与日志 ------------------------------------------------------
 
     def _log(self, text: str) -> None:
+        """界面日志与文件日志同源：屏幕上看到的每一行都带时间戳落到会话日志里。"""
         self.log.appendPlainText(text)
+        logger().info(text)
 
     def _on_event(self, event: dict) -> None:
         self.progress.apply(event)

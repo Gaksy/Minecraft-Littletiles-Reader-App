@@ -6,14 +6,19 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from .config import AppConfig
+from . import __version__
+from .applog import logger, start_session
+from .config import APP_DIR, AppConfig
 from .ui.main_window import MainWindow
 
 
 def main() -> int:
+    app_config = AppConfig.load()
+    path = start_session(APP_DIR, __version__)
     app = QApplication(sys.argv)
     app.setApplicationName("LittleTiles Reader")
-    window = MainWindow(AppConfig.load())
+    logger().info("会话日志: %s", path)
+    window = MainWindow(app_config)
     window.show()
     return app.exec()
 
