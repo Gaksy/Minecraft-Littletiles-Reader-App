@@ -40,18 +40,22 @@ def find_region_data(data_root: Path) -> Path | None:
     """找一个能用的 region 目录。
 
     测试数据可能解压成目录，也可能打包成 zip 存放（现在的 `regions/` 就是
-    base/escalator/subway 三个 zip），两种都支持。
+    base/escalator/subway 三个 zip），两种都支持；zip 里可能是**完整存档**
+    （`.mca` 在 `region/` 子目录下）也可能只装了 region 文件，所以用 rglob 找。
     """
     regions = data_root / "regions"
     if not regions.is_dir():
         return None
     for entry in sorted(regions.iterdir()):
-        if entry.is_dir() and any(entry.glob("*.mca")):
+        if entry.is_dir() and any(entry.rglob("*.mca")):
             return entry
     for entry in sorted(regions.glob("*.zip")):
         target = Path(tempfile.mkdtemp(prefix="lt-region-")) / entry.stem
         with zipfile.ZipFile(entry) as archive:
             archive.extractall(target)
+        # 完整存档：返回存档根（库会自己拼 region/）；只有 region 文件：返回它本身
+        if any((target / "region").glob("*.mca")):
+            return target
         if any(target.glob("*.mca")):
             return target
     return None

@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from ..applog import logger
 from ..config import AppConfig
 from ..project import Project
-from .theme import colors_for
+from . import design
 from .widgets import wrap
 
 COVER_SIZE = 72
@@ -109,19 +109,19 @@ class ProjectCard(QWidget):
         self.actions.addStretch(1)
         layout.addLayout(self.actions)
 
-        muted = colors_for(self.palette()).muted.name()
-        self.description.setStyleSheet("color:%s;" % muted)
-        self.path_label.setStyleSheet("color:%s; font-size:11px;" % muted)
+        design.set_role(self.description, "hint")
+        design.set_role(self.path_label, "dim")
 
     def _refresh(self) -> None:
-        muted = colors_for(self.palette()).muted.name()
+        theme = design.theme()
         if self.project is None:
             self.name.setText("项目不可用")
             self.description.setText("读不到 project.json——目录可能被搬走或删掉了。")
             self.path_label.setText(self.directory)
             self.cover.setText("?")
             self.cover.setStyleSheet(
-                "border:1px dashed %s; color:%s; border-radius:6px;" % (muted, muted)
+                "border:%dpx dashed %s; color:%s;"
+                % (design.METRICS.border_width, theme.border, theme.text_3)
             )
             self.btn_relocate.setVisible(True)
             self.btn_forget.setVisible(True)
@@ -136,7 +136,8 @@ class ProjectCard(QWidget):
             self.cover.setPixmap(QPixmap())
             self.cover.setText("无封面")
             self.cover.setStyleSheet(
-                "border:1px dashed %s; color:%s; border-radius:6px;" % (muted, muted)
+                "border:%dpx dashed %s; color:%s;"
+                % (design.METRICS.border_width, theme.border, theme.text_3)
             )
         else:
             pixmap = QPixmap(str(cover)).scaled(
@@ -146,17 +147,21 @@ class ProjectCard(QWidget):
             )
             self.cover.setPixmap(pixmap)
             self.cover.setText("")
-            self.cover.setStyleSheet("border:1px solid %s; border-radius:6px;" % muted)
+            self.cover.setStyleSheet(
+                "border:%dpx solid %s;" % (design.METRICS.border_width, theme.border)
+            )
         self.btn_relocate.setVisible(False)
         self.btn_forget.setVisible(False)
         self._paint_border()
 
     def _paint_border(self) -> None:
-        colors = colors_for(self.palette())
-        border = colors.accent_strong if self._hover else colors.border
+        """卡片描边：悬停时用强调绿，平时用普通描边（直角 + 2px，与网站一致）。"""
+
+        theme = design.theme()
+        border = theme.accent if self._hover else theme.border
         self.setStyleSheet(
-            "#ProjectCard { border:1px solid %s; border-radius:8px; background:%s; }"
-            % (border.name(), colors.surface.name())
+            "#ProjectCard { border:%dpx solid %s; background:%s; }"
+            % (design.METRICS.border_width, border, theme.sidebar)
         )
 
     # ---- 交互 ------------------------------------------------------------
@@ -218,8 +223,7 @@ class ProjectListWidget(QWidget):
         self.scroll.setWidget(self.cards_host)
         root.addWidget(self.scroll, 1)
 
-        muted = colors_for(self.palette()).muted.name()
-        self.count_label.setStyleSheet("color:%s;" % muted)
+        design.set_role(self.count_label, "hint")
 
     # ---- 刷新 ------------------------------------------------------------
 
@@ -258,9 +262,7 @@ class ProjectListWidget(QWidget):
         if not entries:
             hint = QLabel("还没有项目。新建一个，或把已有的项目目录添加进来。")
             wrap(hint)
-            hint.setStyleSheet(
-                "color:%s;" % colors_for(self.palette()).muted.name()
-            )
+            design.set_role(hint, "hint")
             self.cards.addWidget(hint, 0, 0, 1, COLUMNS)
             self.count_label.setText("")
         else:

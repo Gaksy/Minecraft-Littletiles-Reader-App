@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..storage import human_size, percent
+from . import design
 
 BAR_HEIGHT = 22
 GAP = 2
@@ -115,12 +116,13 @@ class StorageBar(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        radius = self.height() / 2.0
+        # 像素风：直角、不抗锯齿（与网站一致；早期是圆头条）
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        theme = design.theme()
         # 底：空的部分看得见（用户能知道"条还没满"）
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self.palette().color(QPalette.ColorRole.Mid))
-        painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), radius, radius)
+        painter.setBrush(QColor(theme.surface_3))
+        painter.drawRect(QRectF(0, 0, self.width(), self.height()))
 
         for index, (rect, segment) in enumerate(zip(self._rects(), self._segments)):
             color = QColor(segment.color)
@@ -128,12 +130,12 @@ class StorageBar(QWidget):
                 color.setAlpha(70)      # 其余变淡，被指的那段自己站出来
             painter.setBrush(color)
             if index == self._highlight:
-                pen = QPen(self.palette().color(QPalette.ColorRole.WindowText))
+                pen = QPen(QColor(theme.text_1))
                 pen.setWidth(2)
                 painter.setPen(pen)
             else:
                 painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect, min(radius, rect.width() / 2.0), radius)
+            painter.drawRect(rect)
         painter.end()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
@@ -175,7 +177,8 @@ class LegendRow(QWidget):
         dot = QLabel()
         dot.setFixedSize(10, 10)
         dot.setStyleSheet(
-            "background:%s; border-radius:5px;" % segment.color.name()
+            "background:%s; border:%dpx solid %s;"
+            % (segment.color.name(), design.METRICS.border_width, design.theme().border)
         )
         row.addWidget(dot)
         row.addWidget(QLabel(segment.label))

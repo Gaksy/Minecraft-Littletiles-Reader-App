@@ -41,8 +41,8 @@ from ..job import (
     expand_chunks,
 )
 from ..savefolder import inspect as inspect_save
-from .theme import colors_for
 from .illustration_dialog import IllustrationDialog
+from . import design
 from .widgets import wrap
 from .chunk_grid import ChunkStateGrid
 
@@ -156,9 +156,7 @@ class ExportRegionDialog(QDialog):
         self.grid_legend = QLabel(
             "灰 = 从未导出　绿 = 已导出且存档未变　黄 = 已导出但之后存档变过"
         )
-        self.grid_legend.setStyleSheet(
-            "color:%s;" % colors_for(self.palette()).muted.name()
-        )
+        design.set_role(self.grid_legend, "hint")
         if self._state_provider is None:
             self.grid_legend.setText("（项目模式下这里会显示每个区块导出过没有）")
             self.state_grid.setVisible(False)
@@ -176,16 +174,12 @@ class ExportRegionDialog(QDialog):
 
         self.summary = QLabel()
         wrap(self.summary)
-        self.summary.setStyleSheet(
-            "color:%s;" % colors_for(self.palette()).muted.name()
-        )
+        design.set_role(self.summary, "hint")
         right_layout.addWidget(self.summary)
 
         # 选项放在右列：说明图搬去独立窗口之后，这里原本空着一大块。
         options_label = QLabel("选项")
-        options_label.setStyleSheet(
-            "color:%s;" % colors_for(self.palette()).muted.name()
-        )
+        design.set_role(options_label, "hint")
         right_layout.addSpacing(8)
         right_layout.addWidget(options_label)
 
@@ -257,18 +251,17 @@ class ExportRegionDialog(QDialog):
 
     def _sync_save_status(self) -> None:
         """存档目录选对没有——选错一层是最常见、也最难自查的错误。"""
-        colors = colors_for(self.palette())
         result = inspect_save(self.save_edit.text(), self.dimension.currentData())
         if result.ok:
             text = "✓ %s" % result.message
-            color = colors.accent_strong
+            role = "ok"
         else:
             text = "！%s" % result.message
             if result.hint:
                 text += "　%s" % result.hint
-            color = colors.marker
+            role = "warn"
         self.save_status.setText(text)
-        self.save_status.setStyleSheet("color:%s;" % color.name())
+        design.set_role(self.save_status, role)
 
     def _update_state_grid(self, selection) -> None:
         """把"导过没有"画出来。数据源没给就什么都不做。

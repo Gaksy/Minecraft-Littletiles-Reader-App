@@ -32,6 +32,7 @@ class AppConfig:
     last_export: dict = field(default_factory=dict)     # 上次的导出选项，作为下次默认
     ask_open_output: bool = True                        # 导出完成后是否询问打开目录
     shown_chunk_help: bool = False                      # 区块选择说明是否已经自动弹过一次
+    ui_theme: str = "dark"                              # 界面主题：dark（默认，同网站）/ light
 
     @staticmethod
     def load(path: Path | None = None) -> "AppConfig":

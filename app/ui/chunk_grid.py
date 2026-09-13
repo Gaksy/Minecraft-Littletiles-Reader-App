@@ -13,16 +13,25 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from ..records import STATE_FRESH, STATE_MISSING, STATE_STALE, STATE_LABELS
+from ..records import STATE_FRESH, STATE_LABELS, STATE_MISSING, STATE_STALE
+from . import design
 
 CELL = 22
 MAX_CELLS = 32      # 单边最多画这么多格
 
-STATE_COLORS = {
-    STATE_MISSING: "#9aa0a6",   # 灰
-    STATE_FRESH: "#59a14f",     # 绿
-    STATE_STALE: "#edc948",     # 黄
-}
+def state_color(state: str) -> QColor:
+    """三种状态的颜色取当前主题的语义色（深浅两套都看得清）。
+
+    未导出 = 次要文字色（灰）、已导出 = 强调绿、可能过期 = 琥珀；
+    早期这里是写死的三个十六进制值，深色主题下会有一格糊在背景里。
+    """
+
+    theme = design.theme()
+    if state == STATE_FRESH:
+        return QColor(theme.accent)
+    if state == STATE_STALE:
+        return QColor(theme.amber)
+    return QColor(theme.text_4)
 
 
 class ChunkStateGrid(QWidget):
@@ -98,14 +107,15 @@ class ChunkStateGrid(QWidget):
         if self._count_x <= 0 or self._count_z <= 0:
             return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        border = self.palette().color(QPalette.ColorRole.Mid)
+        # 像素风：不抗锯齿、直角格子（与网站一致）
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        border = QColor(design.theme().border)
         for row in range(self._count_z):
             for column in range(self._count_x):
                 x = self._min_x + column
                 z = self._min_z + row
                 rect = self._cell_rect(x, z)
-                painter.setBrush(QColor(STATE_COLORS[self._state_of(x, z)]))
+                painter.setBrush(state_color(self._state_of(x, z)))
                 pen = QPen(border)
                 pen.setWidth(1)
                 painter.setPen(pen)

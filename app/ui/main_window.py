@@ -43,37 +43,13 @@ from ..library import Library
 from ..vanilla import build_package_from_resolved, detect_kind
 from .export_panel import ExportPanel
 from .export_dialog import ExportRegionDialog
+from . import design
 from .material_dialog import MaterialChoiceDialog
 from .material_manager import MaterialManagerDialog
 from .illustration_dialog import IllustrationDialog
 from .project_list import ProjectListWidget
 from .project_window import ProjectWindow
-from .theme import colors_for
 from .widgets import wrap
-
-
-def big_button_style(palette) -> str:
-    """两个大入口的样式。
-
-    颜色从调色板取——写死 `#ffffff` 的话，深色模式下就是白底浅字。
-    """
-    colors = colors_for(palette)
-    return """
-QPushButton {{
-    font-size: 18px; padding: 26px 18px; border-radius: 10px;
-    border: 1px solid {border}; background: {surface};
-    color: {text}; text-align: center;
-}}
-QPushButton:hover {{ background: {hover}; border-color: {accent}; }}
-QPushButton:disabled {{ color: {muted}; }}
-""".format(
-        border=colors.border.name(),
-        surface=colors.surface.name(),
-        text=colors.text.name(),
-        hover=colors.surface_hover.name(),
-        accent=colors.accent_strong.name(),
-        muted=colors.muted.name(),
-    )
 
 
 def open_directory(path: Path) -> bool:
@@ -222,29 +198,35 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
+        layout.setContentsMargins(
+            design.METRICS.gap_lg,
+            design.METRICS.gap_lg,
+            design.METRICS.gap_lg,
+            design.METRICS.gap_lg,
+        )
+        layout.setSpacing(design.METRICS.gap_md)
 
-        title = QLabel("要做什么？")
-        title.setFont(QFont("", 12, QFont.Weight.Bold))
-        layout.addWidget(title)
+        layout.addWidget(design.title("要做什么？"))
 
         buttons = QHBoxLayout()
-        self.btn_snbt = QPushButton("导出 SNBT\n（结构文件 / 粘贴文本）")
-        self.btn_region = QPushButton("导出存档\n（选区块导出 OBJ）")
+        buttons.setSpacing(design.METRICS.gap_md)
+        # 两个入口同级：都用大号主按钮（网站的大按钮档 258×48）
+        self.btn_snbt = design.primary_button("导出 SNBT\n（结构文件 / 粘贴文本）")
+        self.btn_region = design.primary_button("导出存档\n（选区块导出 OBJ）")
         for button in (self.btn_snbt, self.btn_region):
+            button.setProperty("size", "large")
+            button.setMinimumHeight(design.METRICS.button_large_height * 2)
             buttons.addWidget(button, 1)
         layout.addLayout(buttons)
         self.btn_snbt.clicked.connect(self._export_snbt)
         self.btn_region.clicked.connect(self._export_region)
 
-        self.hint = QLabel(
+        self.hint = design.hint(
             "上面两个是快速导出：不绑定项目、不记录历史。"
             "想留记录、留素材副本、以后还能查「哪块导过」，就用下面的项目。"
         )
         wrap(self.hint)
         layout.addWidget(self.hint)
-
-        # 等两个控件都建好了再上色（它俩的样式都从调色板来）
-        self._apply_button_style()
 
         self.projects = ProjectListWidget(self.config, self)
         self.projects.opened.connect(self._open_project)
@@ -257,17 +239,6 @@ class MainWindow(QMainWindow):
         self.status = self.statusBar()
         # 菜单栏最后建：它引用了日志面板这些控件，得等它们都存在
         self._build_menu()
-
-    def _apply_button_style(self) -> None:
-        style = big_button_style(self.palette())
-        for button in (self.btn_snbt, self.btn_region):
-            button.setStyleSheet(style)
-        self.hint.setStyleSheet("color: %s;" % colors_for(self.palette()).muted.name())
-
-    def changeEvent(self, event: QEvent) -> None:
-        if event.type() == QEvent.Type.PaletteChange:
-            self._apply_button_style()
-        super().changeEvent(event)
 
     def _refresh_status(self) -> None:
         cli = self._cli_path()
@@ -382,8 +353,25 @@ class MainWindow(QMainWindow):
         output.addAction("打开输出目录", self._open_last_output)
         output.addAction("清空日志窗口", self.log.clear)
 
+        view = bar.addMenu("视图(&V)")
+        self.action_theme = view.addAction(self._theme_action_text(), self._toggle_theme)
+
         help_menu = bar.addMenu("帮助(&H)")
         help_menu.addAction("关于", self._show_about)
+
+    def _theme_action_text(self) -> str:
+        return "切换到浅色主题" if design.manager().is_dark else "切换到深色主题"
+
+    def _toggle_theme(self) -> None:
+        """深色 ↔ 浅色（与网站同一套两套配色），并记住选择。"""
+
+        theme = design.toggle_theme()
+        self.config.ui_theme = theme.name
+        try:
+            self.config.save()
+        except OSError as error:
+            logger().warning("主题偏好没保存下来：%s", error)
+        self.action_theme.setText(self._theme_action_text())
 
     def _show_help(self) -> None:
         IllustrationDialog(self).exec()

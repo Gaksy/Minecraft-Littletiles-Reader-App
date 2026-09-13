@@ -85,7 +85,7 @@ from .chunk_grid import ChunkStateGrid
 from .export_dialog import ExportRegionDialog
 from .export_panel import ExportPanel
 from .storage_bar import Segment, StorageBar, StorageLegend
-from .theme import colors_for
+from . import design
 from .widgets import ClickableLabel, wrap
 
 
@@ -417,7 +417,7 @@ class _ChunkQueryDialog(QDialog):
         legend = QLabel(
             "灰 = 从未导出　绿 = 已导出且存档未变　黄 = 已导出但之后存档变过"
         )
-        legend.setStyleSheet("color:%s;" % colors_for(self.palette()).muted.name())
+        design.set_role(legend, "hint")
         root.addWidget(legend)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -617,12 +617,15 @@ class ProjectWindow(QMainWindow):
         status_box = QVBoxLayout()
         self.package_status = QLabel()
         wrap(self.package_status)
+        # 别被挤成竖条：这行文字在窄列里会一个字一行（中文没有空格），
+        # 给个下限宽度、并让它吃右侧剩余空间（原先固定 0 拉伸）。
+        self.package_status.setMinimumWidth(220)
         status_box.addWidget(self.package_status)
         self.btn_recompose = QPushButton("重新组合素材")
         self.btn_recompose.clicked.connect(lambda: self._compose(force=True, report=True))
         status_box.addWidget(self.btn_recompose)
         status_box.addStretch(1)
-        row.addLayout(status_box, 0)
+        row.addLayout(status_box, 1)
         return box
 
     def _build_save_box(self) -> QGroupBox:
@@ -649,9 +652,7 @@ class ProjectWindow(QMainWindow):
         self.btn_backups.clicked.connect(self._manage_backups)
         self.backup_label = QLabel()
         wrap(self.backup_label)
-        self.backup_label.setStyleSheet(
-            "color:%s;" % colors_for(self.palette()).muted.name()
-        )
+        design.set_role(self.backup_label, "hint")
         backup_row.addWidget(self.btn_backup)
         backup_row.addWidget(self.btn_backups)
         backup_row.addWidget(self.backup_label, 1)
@@ -755,9 +756,7 @@ class ProjectWindow(QMainWindow):
 
         self.retention_label = QLabel()
         wrap(self.retention_label)
-        self.retention_label.setStyleSheet(
-            "color:%s;" % colors_for(self.palette()).muted.name()
-        )
+        design.set_role(self.retention_label, "hint")
         layout.addWidget(self.retention_label)
         return box
 
@@ -793,16 +792,17 @@ class ProjectWindow(QMainWindow):
         help_menu.addAction("关于", self._show_about)
 
     def _apply_button_style(self) -> None:
-        from .main_window import big_button_style
+        """两个导出按钮按"大号主按钮"着色（与主界面同级入口同款）。
 
-        style = big_button_style(self.palette())
+        样式本身来自全局 QSS：这里只打属性，不再各自拼样式表——
+        否则切换主题时这些按钮会停在旧颜色上。
+        """
+
         for button in (self.btn_export_region, self.btn_export_snbt):
-            button.setStyleSheet(style)
-
-    def changeEvent(self, event) -> None:  # noqa: N802
-        if event.type() == QEvent.Type.PaletteChange:
-            self._apply_button_style()
-        super().changeEvent(event)
+            # 与网站首页的主 CTA 同一外观（草绿渐变）
+            design.set_variant(button, "secondary")
+            button.setProperty("size", "large")
+            button.setMinimumHeight(design.METRICS.button_large_height)
 
     def eventFilter(self, source, event) -> bool:  # noqa: N802
         # 描述框失焦就存盘（和名称框的 editingFinished 一个意思）
@@ -814,9 +814,7 @@ class ProjectWindow(QMainWindow):
 
     def _refresh_all(self) -> None:
         self.directory_label.setText("目录：%s" % self.project.path)
-        self.directory_label.setStyleSheet(
-            "color:%s;" % colors_for(self.palette()).muted.name()
-        )
+        design.set_role(self.directory_label, "dim")
         self._refresh_cover()
         self._refresh_bindings()
         self._refresh_package_status()
@@ -832,12 +830,13 @@ class ProjectWindow(QMainWindow):
 
     def _refresh_cover(self) -> None:
         cover = self.project.cover_png()
-        muted = colors_for(self.palette()).muted.name()
+        theme = design.theme()
         if cover is None:
             self.cover.setPixmap(QPixmap())
             self.cover.setText("封面\n（点击选择）")
             self.cover.setStyleSheet(
-                "border:1px dashed %s; color:%s; border-radius:6px;" % (muted, muted)
+                "border:%dpx dashed %s; color:%s;"
+                % (design.METRICS.border_width, theme.border, theme.text_3)
             )
             return
         pixmap = QPixmap(str(cover)).scaled(
@@ -846,7 +845,9 @@ class ProjectWindow(QMainWindow):
         )
         self.cover.setPixmap(pixmap)
         self.cover.setText("")
-        self.cover.setStyleSheet("border:1px solid %s; border-radius:6px;" % muted)
+        self.cover.setStyleSheet(
+            "border:%dpx solid %s;" % (design.METRICS.border_width, theme.border)
+        )
 
     def _refresh_bindings(self) -> None:
         library = Library.load(self.app_dir)
@@ -876,7 +877,6 @@ class ProjectWindow(QMainWindow):
         library = Library.load(self.app_dir)
         bound = bound_library(self.project, library)
         ready = (self.project.package_dir / "block_textures.tsv").is_file()
-        muted = colors_for(self.palette()).muted.name()
         if not bound.enabled:
             text = "还没有绑定素材：导出会是白模（几何完整，没有贴图）。"
             self.btn_recompose.setEnabled(False)
@@ -887,7 +887,7 @@ class ProjectWindow(QMainWindow):
             text = "素材包：需要重新组合（导出前会自动做一次）"
             self.btn_recompose.setEnabled(True)
         self.package_status.setText(text)
-        self.package_status.setStyleSheet("color:%s;" % muted)
+        design.set_role(self.package_status, "hint")
 
     def _refresh_history(self) -> None:
         records = self.store.records

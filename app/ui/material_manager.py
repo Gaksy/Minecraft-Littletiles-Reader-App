@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from ..library import KIND_LABELS, Library, import_source
 from ..applog import logger
 from ..sources import ARCHIVE_SUFFIXES
-from .theme import colors_for
+from . import design
 from .widgets import wrap
 
 ICON_SIZE = 32
@@ -81,7 +81,6 @@ class MaterialManagerDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        muted = colors_for(self.palette()).muted.name()
 
         hint = QLabel(
             "右边列表的顺序就是叠加顺序：<b>越靠下优先级越高</b>，"
@@ -89,7 +88,7 @@ class MaterialManagerDialog(QDialog):
         )
         hint.setTextFormat(Qt.TextFormat.RichText)
         wrap(hint)
-        hint.setStyleSheet("color:%s;" % muted)
+        design.set_role(hint, "hint")
         root.addWidget(hint)
 
         columns = QHBoxLayout()

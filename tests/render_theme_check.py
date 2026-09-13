@@ -1,7 +1,10 @@
-"""把界面在浅色与深色调色板下各渲染一张 PNG，人工核对配色。
+"""把界面在深色与浅色主题下各渲染一张 PNG，人工核对配色。
 
 离屏运行，不需要显示器：
     python tests/render_theme_check.py [输出目录]
+
+主题由 `app/ui/design` 决定（与网站同一套令牌），所以这里直接切设计系统的
+主题名——早期版本是手工造一份 Qt 调色板来模拟深浅色，那套已经管不到界面了。
 """
 
 from __future__ import annotations
@@ -15,40 +18,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtGui import QColor, QPalette  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.config import AppConfig  # noqa: E402
 from app.project import Project  # noqa: E402
 from app.records import ExportRecord, RecordStore  # noqa: E402
+from app.ui import design  # noqa: E402
 from app.ui.export_dialog import ExportRegionDialog  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 from app.ui.project_window import ProjectWindow  # noqa: E402
 
 
-def dark_palette() -> QPalette:
-    """手工造一份深色调色板——不依赖系统是否真的处于深色模式。"""
-    palette = QPalette()
-    window = QColor("#1e1e1e")
-    base = QColor("#252526")
-    text = QColor("#e6e6e6")
-    palette.setColor(QPalette.ColorRole.Window, window)
-    palette.setColor(QPalette.ColorRole.WindowText, text)
-    palette.setColor(QPalette.ColorRole.Base, base)
-    palette.setColor(QPalette.ColorRole.AlternateBase, window)
-    palette.setColor(QPalette.ColorRole.Text, text)
-    palette.setColor(QPalette.ColorRole.Button, base)
-    palette.setColor(QPalette.ColorRole.ButtonText, text)
-    palette.setColor(QPalette.ColorRole.Mid, QColor("#3c3c3c"))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#094771"))
-    palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-    return palette
-
-
-def render(palette: QPalette, path: Path) -> None:
+def render(theme_name: str, path: Path) -> None:
     application = QApplication.instance() or QApplication([])
-    application.setPalette(palette)
+    design.install(application, theme_name)
     window = MainWindow(AppConfig())
     window.resize(880, 620)
     window.show()
@@ -57,10 +40,10 @@ def render(palette: QPalette, path: Path) -> None:
     window.close()
 
 
-def render_dialog(palette: QPalette, path: Path) -> None:
+def render_dialog(theme_name: str, path: Path) -> None:
     """导出对话框里画得最多（自绘网格），单独出一张。"""
     application = QApplication.instance() or QApplication([])
-    application.setPalette(palette)
+    design.install(application, theme_name)
     dialog = ExportRegionDialog(AppConfig())
     dialog.resize(760, 620)
     dialog.show()
@@ -69,10 +52,10 @@ def render_dialog(palette: QPalette, path: Path) -> None:
     dialog.close()
 
 
-def render_project(palette: QPalette, path: Path) -> None:
+def render_project(theme_name: str, path: Path) -> None:
     """项目界面：容量条和图例只有这里有，配色对不对得看它。"""
     application = QApplication.instance() or QApplication([])
-    application.setPalette(palette)
+    design.install(application, theme_name)
     with tempfile.TemporaryDirectory(prefix="lt-theme-proj-") as tmp:
         root = Path(tmp)
         project = Project.create(root / "house", "海滨小屋")
@@ -115,17 +98,16 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     light = out_dir / "light.png"
     dark = out_dir / "dark.png"
-    render(QApplication([]).style().standardPalette(), light)
-    render(dark_palette(), dark)
-    print("浅色: %s" % light)
-    print("深色: %s" % dark)
-    application = QApplication.instance() or QApplication([])
-    render_dialog(application.style().standardPalette(), out_dir / "dialog_light.png")
-    render_dialog(dark_palette(), out_dir / "dialog_dark.png")
-    print("对话框: %s / %s" % (out_dir / "dialog_light.png", out_dir / "dialog_dark.png"))
-    render_project(application.style().standardPalette(), out_dir / "project_light.png")
-    render_project(dark_palette(), out_dir / "project_dark.png")
-    print("项目界面: %s / %s" % (out_dir / "project_light.png", out_dir / "project_dark.png"))
+    # 深色是默认主题（与网站一致），浅色是另一套；文件名保持 light/dark
+    render("dark", dark)
+    render("light", light)
+    render_dialog("dark", out_dir / "dialog_dark.png")
+    render_dialog("light", out_dir / "dialog_light.png")
+    render_project("dark", out_dir / "project_dark.png")
+    render_project("light", out_dir / "project_light.png")
+    for name in ("light", "dark", "dialog_light", "dialog_dark",
+                 "project_light", "project_dark"):
+        print("  %s: %s" % (name, out_dir / (name + ".png")))
     return 0
 
 

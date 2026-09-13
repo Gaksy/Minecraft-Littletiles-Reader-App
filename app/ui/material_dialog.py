@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .theme import colors_for
+from . import design
 from .widgets import wrap
 
 HELP_TEXT = (
@@ -48,12 +48,11 @@ class MaterialChoiceDialog(QDialog):
         self.resize(560, 360)
 
         layout = QVBoxLayout(self)
-        colors = colors_for(self.palette())
 
         if configured:
             label = QLabel("上次使用：\n%s" % configured)
             wrap(label)
-            label.setStyleSheet("color:%s;" % colors.muted.name())
+            design.set_role(label, "hint")
             layout.addWidget(label)
 
         hint = QLabel(HELP_TEXT)
