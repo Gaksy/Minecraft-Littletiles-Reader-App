@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..library import KIND_LABELS, Library, import_source
+from ..materials import inspect_source
 from ..applog import logger
 from ..sources import ARCHIVE_SUFFIXES
 from . import design
@@ -50,16 +52,26 @@ class _Importer(QThread):
 
     finished_with = Signal(object)   # Source，或捕到的 Exception
 
-    def __init__(self, chosen: Path, app_dir: Path, work: Path, parent=None) -> None:
+    def __init__(
+        self,
+        chosen: Path,
+        app_dir: Path,
+        work: Path,
+        name: str | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self._chosen = chosen
         self._app_dir = app_dir
         self._work = work
+        self._name = name
 
     def run(self) -> None:
         try:
             self.finished_with.emit(
-                import_source(self._chosen, self._app_dir, self._work)
+                import_source(
+                    self._chosen, self._app_dir, self._work, name=self._name
+                )
             )
         except Exception as error:
             self.finished_with.emit(error)
@@ -134,8 +146,15 @@ class MaterialManagerDialog(QDialog):
         columns.addLayout(right_box)
 
         self.status = QLabel()
-        self.status.setStyleSheet("color:%s;" % muted)
+        wrap(self.status)
+        design.set_role(self.status, "hint")
         root.addWidget(self.status)
+
+        # 选中左边某个导入物时，这里说明它里面到底有什么（方块/模型/贴图/缺失）
+        self.details = QLabel()
+        wrap(self.details)
+        design.set_role(self.details, "dim")
+        root.addWidget(self.details)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -156,6 +175,7 @@ class MaterialManagerDialog(QDialog):
 
     def _update_buttons(self) -> None:
         """按当前选择决定哪些能点——点不动的时候就该是灰的。"""
+        self._update_details()
         has_left = bool(self.available.selectedItems())
         has_right = bool(self.selected.selectedItems())
         self.btn_enable.setEnabled(has_left)
@@ -172,6 +192,29 @@ class MaterialManagerDialog(QDialog):
         )
         self.btn_up.setEnabled(bool(rows) and min(rows) > (1 if pinned else 0))
         self.btn_down.setEnabled(bool(rows) and max(rows) < self.selected.count() - 1)
+
+    def _update_details(self) -> None:
+        """把选中那个导入物的内容摘要显示出来（方块 / 模型 / 贴图 / 缺失）。
+
+        看的是左列（素材库）；左列没选就看右列（本次启用），两边选的目标一样。
+        """
+
+        view = self.available if self.available.selectedItems() else self.selected
+        items = view.selectedItems()
+        if len(items) != 1:
+            self.details.setText("")
+            return
+        source_id = items[0].data(Qt.ItemDataRole.UserRole)
+        source = self.library.by_id(source_id)
+        if source is None:
+            self.details.setText("")
+            return
+        try:
+            summary = inspect_source(Path(source.path))
+        except OSError as error:
+            self.details.setText("读不出内容：%s" % error)
+            return
+        self.details.setText("%s：%s" % (source.name, summary.render()))
 
     # ---- 列表刷新 --------------------------------------------------------
 
@@ -238,6 +281,16 @@ class MaterialManagerDialog(QDialog):
         )
         if not chosen:
             return
+        # 名字由用户定：默认取文件名，但允许改（素材库列表里显示的就是它）
+        default_name = Path(chosen).stem
+        name, accepted = QInputDialog.getText(
+            self,
+            "给这个素材起个名字",
+            "这个名字会显示在素材库与项目绑定里。\n留空就用文件名：%s" % default_name,
+            text=default_name,
+        )
+        if not accepted:
+            return
         work = self._app_dir / "cache" / "sources"
         progress = QProgressDialog(
             "正在解压并识别…\n\n%s\n\n（客户端 jar 要十几秒）" % Path(chosen).name,
@@ -249,7 +302,7 @@ class MaterialManagerDialog(QDialog):
         progress.setMinimumDuration(0)
         progress.show()
 
-        importer = _Importer(Path(chosen), self._app_dir, work, self)
+        importer = _Importer(Path(chosen), self._app_dir, work, name=name, parent=self)
         result: dict = {}
         loop = QEventLoop()
 

@@ -213,10 +213,12 @@ def import_source(
     archive: Path | str,
     app_dir: Path,
     work_dir: Path,
+    name: str | None = None,
 ) -> Source:
     """导入一个 zip/rar/jar：解压 → 认类型 → 提图标 → 登记。
 
     解压结果按指纹存放，所以同一个文件重复导入不会越堆越多。
+    `name` 是显示名（用户自己起）；不给就用去掉扩展名的文件名。
     """
     archive = Path(archive)
     if not archive.is_file():
@@ -237,7 +239,7 @@ def import_source(
     )
     return Source(
         id=digest,
-        name=archive.stem,
+        name=(name or "").strip() or archive.stem,
         kind=kind,
         path=str(stored),
         icon=icon,
