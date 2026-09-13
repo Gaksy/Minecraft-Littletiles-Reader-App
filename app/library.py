@@ -165,24 +165,22 @@ def detect_kind_from_dir(root: Path) -> str:
 
     判断顺序很讲究：**不能先看 `pack.mcmeta`**——模组 jar 通常也带它（对游戏而言
     模组就是个资源包），先看它会把模组全判成资源包。正确的顺序是：
-      1. 原版客户端：同时有 assets/minecraft/blockstates 与 models
-         （只看 blockstates 不够——资源包也可能塞一份覆盖用的；
-          而 models/block 有上千个文件，只有客户端 jar 才带）
-      2. 自带非 minecraft 命名空间 → 模组（新增内容）
-      3. 只剩 pack.mcmeta 或只覆盖 minecraft → 资源包（替换内容）
+      1. 先分"是不是 jar"：jar 里有 META-INF / 类文件，资源包没有。
+         这一条比"看有没有 blockstates/models"可靠得多——实测那份
+         INCEPTION 资源包就带了 48 个 blockstates 和 85 个 models 去覆盖原版模型，
+         按文件数判断会把它当成客户端。
+      2. jar：带 assets/minecraft/blockstates → 客户端；否则 → 模组
+      3. 非 jar：有 pack.mcmeta 或 assets/ → 资源包
     """
     assets = root / "assets"
     minecraft = assets / "minecraft"
-    if (minecraft / "blockstates").is_dir() and (minecraft / "models").is_dir():
-        return KIND_VANILLA
-    others = []
-    if assets.is_dir():
-        others = [
-            p for p in sorted(assets.iterdir()) if p.is_dir() and p.name != "minecraft"
-        ]
-    if others:
-        return KIND_MOD
-    if (root / "pack.mcmeta").is_file():
+    # jar（客户端或模组）的根一定有 META-INF，资源包没有
+    is_jar = (root / "META-INF").is_dir() or (root / "net").is_dir()
+    if is_jar:
+        if (minecraft / "blockstates").is_dir():
+            return KIND_VANILLA
+        return KIND_MOD if assets.is_dir() else KIND_UNKNOWN
+    if (root / "pack.mcmeta").is_file() or assets.is_dir():
         return KIND_PACK
     return KIND_UNKNOWN
 
@@ -224,7 +222,9 @@ def import_source(
     if not archive.is_file():
         raise FileNotFoundError("找不到文件：%s" % archive)
     digest = fingerprint(archive)
-    resolved = resolve_source(archive, work_dir)
+    # marker 用"有 assets/ 或有 pack.mcmeta"：客户端 jar、模组 jar、资源包三者
+    # 都满足其一，而且能穿过多套的那一层文件夹。
+    resolved = resolve_source(archive, work_dir, marker=["assets", "pack.mcmeta"])
     kind = detect_kind_from_dir(resolved.path)
 
     stored = app_dir / "resources" / "sources" / digest

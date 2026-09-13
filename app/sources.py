@@ -41,15 +41,19 @@ def is_archive(path: Path) -> bool:
 def resolve_source(
     source: Path | str,
     work_dir: Path,
-    marker: str | None = None,
+    marker: str | list[str] | None = None,
 ) -> Resolved:
     """把来源变成可用目录。
 
-    marker 是"目标根里应该存在的东西"，用来穿过包内多余的层级：
+    marker 是"目标根里应该存在的东西"，用来穿过包内多余的层级。可以给多个候选，
+    命中任意一个即可——因为不同来源的标志物不一样：
       * 存档        -> "*.mca"
       * 素材包      -> "block_textures.tsv"
-      * 原版客户端 jar -> "assets/minecraft"
+      * 客户端 jar / 模组 jar / 资源包 -> ["assets", "pack.mcmeta"]
     找不到 marker 时返回解压出来的顶层目录（让调用方自己报错，别在这儿猜）。
+
+    为什么必须要这一步：很多包会多套一层文件夹（`INCEPTION texture V1.4/assets/...`），
+    不穿过去就会在错的层级上找东西，然后报"认不出"。
     """
     source = Path(source)
     if source.is_dir():
@@ -89,7 +93,9 @@ def _relative_hint(base: Path, root: Path) -> str:
     return str(relative) if str(relative) != "." else "（包根就是目标根）"
 
 
-def _find_root(base: Path, marker: str | None, max_depth: int = 4) -> Path | None:
+def _find_root(
+    base: Path, marker: str | list[str] | None, max_depth: int = 4
+) -> Path | None:
     """广度优先找最外层"含 marker"的目录（穿越多余的嵌套层）。"""
     if marker is None:
         return base
@@ -111,10 +117,15 @@ def _find_root(base: Path, marker: str | None, max_depth: int = 4) -> Path | Non
     return None
 
 
-def _has_marker(directory: Path, marker: str) -> bool:
-    if "/" in marker:      # 多级标记，如 assets/minecraft
-        return (directory / marker).exists()
-    return any(directory.glob(marker))
+def _has_marker(directory: Path, marker: str | list[str]) -> bool:
+    markers = [marker] if isinstance(marker, str) else list(marker)
+    for single in markers:
+        if "/" in single:      # 多级标记，如 assets/minecraft
+            if (directory / single).exists():
+                return True
+        elif any(directory.glob(single)):
+            return True
+    return False
 
 
 def _extract_zip(archive: Path, target: Path) -> None:

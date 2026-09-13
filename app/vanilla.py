@@ -37,13 +37,13 @@ def detect_kind(root: Path) -> str:
     """
     assets = root / "assets"
     minecraft = assets / "minecraft"
-    if (minecraft / "blockstates").is_dir() and (minecraft / "models").is_dir():
-        return "vanilla"
-    if assets.is_dir() and any(
-        p.is_dir() and p.name != "minecraft" for p in assets.iterdir()
-    ):
-        return "mod"
-    if (root / "pack.mcmeta").is_file():
+    # 与 app.library 同一套判据：先分"是不是 jar"（jar 有 META-INF，资源包没有），
+    # 再看它带不带原版的 blockstates。
+    if (root / "META-INF").is_dir() or (root / "net").is_dir():
+        if (minecraft / "blockstates").is_dir():
+            return "vanilla"
+        return "mod" if assets.is_dir() else "unknown"
+    if (root / "pack.mcmeta").is_file() or assets.is_dir():
         return "resourcepack"
     return "unknown"
 
