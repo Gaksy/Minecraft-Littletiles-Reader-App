@@ -82,10 +82,20 @@ class PackSource:
 
     @staticmethod
     def _extract_rar(rar_path, target):
-        """用 bsdtar（macOS 自带，能读 rar）或 unar 解压到 target。"""
+        """解压 rar。Python 读不了 rar，得借外部工具。
+
+        各平台的可用名字不一样，按顺序试：
+          * `bsdtar`  —— macOS 自带
+          * `tar`     —— Windows 10+ 自带的 tar 其实就是 bsdtar（libarchive），**能读 rar**
+          * `unar`    —— brew 装的
+          * `unrar`   —— WinRAR 的命令行（Windows 上常见）
+        之前只试了 bsdtar/unar，于是 Windows 上明明有能用的 tar 也会失败。
+        """
         commands = [
             ["bsdtar", "-xf", str(rar_path), "-C", str(target)],
+            ["tar", "-xf", str(rar_path), "-C", str(target)],
             ["unar", "-q", "-o", str(target), str(rar_path)],
+            ["unrar", "x", "-y", str(rar_path), str(target) + os.sep],
         ]
         for command in commands:
             if shutil.which(command[0]) is None:
@@ -94,7 +104,7 @@ class PackSource:
             if done.returncode == 0 and any(target.rglob("*")):
                 return target
         raise SystemExit(
-            "解压 rar 失败：需要系统自带的 bsdtar 或 brew 的 unar；"
+            "解压 rar 失败：需要 bsdtar / tar（Windows 自带）/ unar / unrar 之一；"
             "也可以手动解压后 --pack <目录>"
         )
 
