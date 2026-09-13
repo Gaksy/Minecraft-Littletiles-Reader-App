@@ -114,6 +114,22 @@ def build_package_from_resolved(
             raise FileNotFoundError("应用自带的 block_ids.tsv 不见了：%s" % BUNDLED_BLOCK_IDS)
         shutil.copyfile(BUNDLED_BLOCK_IDS, out_dir / "block_ids.tsv")
 
+    # 把原版 textures/blocks 全量补齐。
+    #
+    # 生成端只复制"映射表引用到的"贴图（这里 301 张）。但**模组方块会引用原版里
+    # 没被引用的贴图**——例如 LittleTiles 的流动岩浆引用 minecraft/blocks/lava_flow，
+    # 而岩浆不是完整方块、不在表里。只留 301 张的话，叠加模组后就会缺这些图。
+    # 全量补上（500 张，多几 MB）一次性消掉这一整类问题。
+    vanilla_blocks = minecraft_root / "textures" / "blocks"
+    if vanilla_blocks.is_dir():
+        target = out_dir / "textures" / "blocks"
+        target.mkdir(parents=True, exist_ok=True)
+        for png in vanilla_blocks.rglob("*.png"):
+            destination = target / png.relative_to(vanilla_blocks)
+            if not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(png, destination)
+
     return PackageBuild(
         package_dir=out_dir,
         source_note=source_note,
