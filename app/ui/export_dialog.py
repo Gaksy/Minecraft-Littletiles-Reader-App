@@ -35,12 +35,22 @@ from .chunk_grid import ChunkGrid
 
 
 class ExportRegionDialog(QDialog):
-    """返回一个可直接写盘的 job（`result_job()`）。"""
+    """返回一个可直接写盘的 job（`result_job()`）。
 
-    def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
+    `initial` 是上次用过的选项（来自配置），让复选框记住上次的选择——
+    默认值只应该在**第一次**出现。
+    """
+
+    def __init__(
+        self,
+        config: AppConfig,
+        parent: QWidget | None = None,
+        initial: dict | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("导出存档模型")
         self._config = config
+        self._initial = dict(initial or {})
         self._build_ui()
         self._sync()
 
@@ -97,12 +107,13 @@ class ExportRegionDialog(QDialog):
         layout.addLayout(grid_row)
 
         self.plain_blocks = QCheckBox("同时导出普通方块")
-        self.plain_blocks.setChecked(True)
+        self.plain_blocks.setChecked(bool(self._initial.get("plain_blocks", True)))
         self.cull = QCheckBox("剔除被相邻方块挡住的面")
-        self.cull.setChecked(True)
+        self.cull.setChecked(bool(self._initial.get("cull_hidden_faces", True)))
         self.center = QCheckBox("把模型中心移到原点")
-        self.center.setChecked(True)
+        self.center.setChecked(bool(self._initial.get("center", True)))
         self.normalize = QCheckBox("再把最长边缩放到 1 个单位（会改变真实尺寸）")
+        self.normalize.setChecked(bool(self._initial.get("normalize_scale", False)))
         layout.addWidget(self.plain_blocks)
         layout.addWidget(self.cull)
         layout.addWidget(self.center)

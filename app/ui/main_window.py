@@ -185,13 +185,29 @@ class MainWindow(QMainWindow):
         self.log.clear()
         self._log("运行: %s --job %s --progress json" % (cli, job_path))
         self._log("输出: %s" % job["output"]["dir"])
+        # 把本次选项写进日志：用户怀疑"某个开关没生效"时，先看这一行。
+        options = job.get("options") or {}
+        if options:
+            names = {
+                "plain_blocks": "普通方块",
+                "cull_hidden_faces": "剔除遮挡面",
+                "center": "居中",
+                "normalize_scale": "单位缩放",
+            }
+            self._log(
+                "选项: "
+                + "  ".join(
+                    "%s=%s" % (names.get(k, k), "是" if v else "否")
+                    for k, v in options.items()
+                )
+            )
         self.cancel.setEnabled(True)
         self.runner.start(cli, job_path, APP_DIR)
 
     # ---- 两个入口 --------------------------------------------------------
 
     def _export_region(self) -> None:
-        dialog = ExportRegionDialog(self.config, self)
+        dialog = ExportRegionDialog(self.config, self, initial=self.config.last_export)
         if dialog.exec() != ExportRegionDialog.DialogCode.Accepted:
             return
         if not dialog.save_edit.text().strip():
@@ -204,8 +220,10 @@ class MainWindow(QMainWindow):
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         out_dir = root / ("%s_%s" % (stamp, dialog.output_name()))
         self.config.remember_save(dialog.save_edit.text().strip())
+        job = dialog.result_job(assets_package=assets, output_dir=str(out_dir))
+        self.config.last_export = dict(job.get("options") or {})
         self.config.save()
-        self._run(dialog.result_job(assets_package=assets, output_dir=str(out_dir)))
+        self._run(job)
 
     def _export_snbt(self) -> None:
         chosen, _ = QFileDialog.getOpenFileName(
