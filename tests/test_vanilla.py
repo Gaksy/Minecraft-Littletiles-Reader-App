@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -16,9 +17,9 @@ sys.path.insert(0, str(ROOT))
 from app.vanilla import BUNDLED_BLOCK_IDS, build_package_from_vanilla  # noqa: E402
 from ltgen.lint import lint_package  # noqa: E402
 
-JAR = Path(
-    r"B:\Game\Minecraft for Windows\InceptionGN\.minecraft\versions\1.12.2\1.12.2.jar"
-)
+# 客户端 jar 的位置因机器而异，用环境变量传，不硬编码谁的本机路径：
+#   set LTR_VANILLA_JAR=B:\...\.minecraft\versions\1.12.2\1.12.2.jar
+JAR_ENV = "LTR_VANILLA_JAR"
 
 FAILURES: list[str] = []
 
@@ -32,9 +33,12 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 def main() -> int:
     print("== 从客户端 jar 生成素材包 ==")
     check("随应用带的 block_ids.tsv 在", BUNDLED_BLOCK_IDS.is_file(), str(BUNDLED_BLOCK_IDS))
-    if not JAR.is_file():
-        check("真实 1.12.2 jar 存在", False, "跳过：%s" % JAR)
-        return 1
+    jar_setting = os.environ.get(JAR_ENV, "")
+    if not jar_setting or not Path(jar_setting).is_file():
+        print("  [跳过] 未设置 %s —— 指向你自己的 1.12.2 客户端 jar 后即可运行"
+              % JAR_ENV)
+        return 0
+    JAR = Path(jar_setting)
 
     with tempfile.TemporaryDirectory(prefix="lt-vanilla-") as tmp:
         work = Path(tmp) / "work"

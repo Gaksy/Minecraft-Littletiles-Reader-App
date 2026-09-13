@@ -6,6 +6,7 @@ jar 那条用你机器上真实的 1.12.2 客户端 jar —— 它就是"用户�
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import zipfile
@@ -81,7 +82,8 @@ def main() -> int:
             check("非压缩包给出明确错误", "只认" in str(error), str(error))
 
         # 6) 真实的 1.12.2 客户端 jar —— 原版素材的入口
-        jar = Path(r"B:\Game\Minecraft for Windows\InceptionGN\.minecraft\versions\1.12.2\1.12.2.jar")
+        jar_setting = os.environ.get("LTR_VANILLA_JAR", "")
+        jar = Path(jar_setting) if jar_setting else Path("(未设置)")
         if jar.is_file():
             check("is_archive 认得 .jar", is_archive(jar))
             result = resolve_source(jar, work, marker="assets/minecraft")
@@ -99,7 +101,7 @@ def main() -> int:
                 "%d 张 PNG（jar 的 500 个条目里含目录项，去掉后是这些）" % count,
             )
         else:
-            check("真实 1.12.2 jar 存在", False, "跳过：%s" % jar)
+            print("  [跳过] 未设置 LTR_VANILLA_JAR（指向你自己的 1.12.2 客户端 jar）")
 
     print()
     if FAILURES:
