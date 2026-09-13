@@ -49,6 +49,7 @@ from .material_manager import MaterialManagerDialog
 from .illustration_dialog import IllustrationDialog
 from .project_list import ProjectListWidget
 from .project_window import ProjectWindow
+from .snbt_source import choose_snbt_source, save_pasted_snbt
 from .widgets import wrap
 
 
@@ -350,6 +351,8 @@ class MainWindow(QMainWindow):
         materials.addAction("区块选择说明…", self._show_help)
 
         output = bar.addMenu("输出(&O)")
+        output.addAction("设置默认输出目录…", self._choose_output_dir)
+        output.addAction("恢复默认输出目录", self._reset_output_dir)
         output.addAction("打开输出目录", self._open_last_output)
         output.addAction("清空日志窗口", self.log.clear)
 
@@ -362,15 +365,47 @@ class MainWindow(QMainWindow):
     def _theme_action_text(self) -> str:
         return "切换到浅色主题" if design.manager().is_dark else "切换到深色主题"
 
+    # ---- 默认输出目录 ----------------------------------------------------
+
+    def _choose_output_dir(self) -> None:
+        """选快速导出的默认落点（项目模式仍旧写进项目自己的目录）。
+
+        以前这个值只能改配置文件（`AppConfig.output_dir` 有字段、没有界面），
+        状态栏里也只显示不可改。
+        """
+
+        current = str(self.config.resolved_output_dir())
+        chosen = QFileDialog.getExistingDirectory(
+            self, "选择默认输出目录（快速导出的落点）", current
+        )
+        if not chosen:
+            return
+        self.config.output_dir = chosen
+        self._save_config("输出目录")
+        self._refresh_status()
+        logger().info("默认输出目录改为 %s", chosen)
+
+    def _reset_output_dir(self) -> None:
+        """清掉自定义值，回到"应用目录下的 outputs/"。"""
+
+        if not self.config.output_dir:
+            return
+        self.config.output_dir = ""
+        self._save_config("输出目录")
+        self._refresh_status()
+
+    def _save_config(self, what: str) -> None:
+        try:
+            self.config.save()
+        except OSError as error:
+            logger().warning("%s没保存下来：%s", what, error)
+
     def _toggle_theme(self) -> None:
         """深色 ↔ 浅色（与网站同一套两套配色），并记住选择。"""
 
         theme = design.toggle_theme()
         self.config.ui_theme = theme.name
-        try:
-            self.config.save()
-        except OSError as error:
-            logger().warning("主题偏好没保存下来：%s", error)
+        self._save_config("主题偏好")
         self.action_theme.setText(self._theme_action_text())
 
     def _show_help(self) -> None:
@@ -600,15 +635,26 @@ class MainWindow(QMainWindow):
         self._run(job)
 
     def _export_snbt(self) -> None:
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "选择 LittleTiles 结构文件", "", "结构文件 (*.txt *.struct);;所有文件 (*)"
-        )
-        if not chosen:
+        """快速导出结构：文件或粘贴文本，两者等价（与项目模式同一套入口）。
+
+        粘贴的文本先落成 `tmp/<时间戳>_paste.txt` 再交给库——job 契约只认路径，
+        留一份文件也便于事后追溯。
+        """
+
+        picked = choose_snbt_source(self)
+        if picked is None:
             return
+        kind, payload = picked
+        if kind == "paste":
+            chosen = str(save_pasted_snbt(payload, APP_DIR / "tmp"))
+            self.panel.log_line("粘贴的 SNBT 已存为：%s" % chosen)
+            stem = "paste_%s" % datetime.now().strftime("%Y%m%d_%H%M%S")
+        else:
+            chosen = payload
+            stem = Path(chosen).stem
         assets = self._choose_assets()
         if assets is None:
             return
-        stem = Path(chosen).stem
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         out_dir = self.config.resolved_output_dir() / ("%s_%s" % (stamp, stem))
         self.config.remember_snbt(chosen)

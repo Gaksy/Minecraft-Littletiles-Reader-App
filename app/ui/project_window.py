@@ -86,6 +86,7 @@ from .export_dialog import ExportRegionDialog
 from .export_panel import ExportPanel
 from .storage_bar import Segment, StorageBar, StorageLegend
 from . import design
+from .snbt_source import choose_snbt_source, save_pasted_snbt
 from .widgets import ClickableLabel, wrap
 
 
@@ -172,32 +173,6 @@ class _BindingPicker(QDialog):
         return [
             item.data(Qt.ItemDataRole.UserRole) for item in self.list.selectedItems()
         ]
-
-
-class _PasteSnbtDialog(QDialog):
-    """粘贴一段 SNBT 文本（框里给个最小示例，省得用户不知道贴什么）。"""
-
-    EXAMPLE = "{name:\"小屋\",tiles:[{pos:[0,0,0],size:[16,16,16],grid:16,color:16711680}]}"
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("粘贴 SNBT")
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("把结构文本粘进来（游戏里复制或从文件里复制的都行）："))
-        self.text = QPlainTextEdit()
-        self.text.setPlaceholderText(self.EXAMPLE)
-        self.text.setMinimumSize(560, 300)
-        layout.addWidget(self.text)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def snbt(self) -> str:
-        return self.text.toPlainText()
 
 
 class _BackupsDialog(QDialog):
@@ -1239,41 +1214,21 @@ class ProjectWindow(QMainWindow):
     def _export_snbt(self) -> None:
         if self.panel.runner.is_running:
             return
-        box = QMessageBox(self)
-        box.setWindowTitle("导出 SNBT")
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setText("结构从哪里来？")
-        box.setInformativeText(
-            "选一个 .txt / .struct 结构文件，或者直接把文本粘进来。"
-        )
-        from_file = box.addButton("选择文件…", QMessageBox.ButtonRole.AcceptRole)
-        from_paste = box.addButton("粘贴文本…", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is from_paste:
-            dialog = _PasteSnbtDialog(self)
-            if dialog.exec() == _PasteSnbtDialog.DialogCode.Accepted:
-                self._run_snbt_paste(dialog.snbt())
+        picked = choose_snbt_source(self)
+        if picked is None:
             return
-        if clicked is not from_file:
+        kind, payload = picked
+        if kind == "paste":
+            self._run_snbt_paste(payload)
             return
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "选择 LittleTiles 结构文件", "", "结构文件 (*.txt *.struct);;所有文件 (*)"
-        )
-        if chosen:
-            self._run_snbt(Path(chosen))
+        self._run_snbt(Path(payload))
 
     def _run_snbt_paste(self, text: str) -> None:
         if not text.strip():
             return
-        target_dir = self.project.path / "inputs" / "snbt"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        target = target_dir / ("%s_paste.txt" % stamp)
-        target.write_text(text, encoding="utf-8")
+        target = save_pasted_snbt(text, self.project.path / "inputs" / "snbt")
         self.panel.log_line("粘贴的 SNBT 已存为：%s" % target)
-        self._run_snbt(target, output_name="paste_%s" % stamp)
+        self._run_snbt(target)
 
     def _run_snbt(self, path: Path, output_name: str = "") -> None:
         package = self._assets_for_export()
