@@ -502,6 +502,7 @@ class ProjectWindow(QMainWindow):
 
         self.bindings = QListWidget()
         self.bindings.setMinimumHeight(96)
+        self.bindings.setMaximumHeight(150)     # 列表默认爱吃满剩余空间，把整页撑得很长
         layout.addWidget(self.bindings)
 
         row = QHBoxLayout()
@@ -535,6 +536,7 @@ class ProjectWindow(QMainWindow):
         )
         self.history.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.history.setMinimumHeight(140)
+        self.history.setMaximumHeight(200)      # 同上：表格的 sizeHint 也是 256 起步
         self.history.verticalHeader().setVisible(False)
         self.history.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.history)

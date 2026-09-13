@@ -56,6 +56,12 @@ class ProjectCard(QWidget):
         self.project = project
         self._hover = False
         self.setMinimumWidth(CARD_MIN_WIDTH)
+        self.setMinimumHeight(120)      # 同一行的卡片高度一致，看着才整齐
+        # 用 objectName 选样式：按"类名"选（ProjectCard {...}）在 PySide 子类上
+        # 不一定匹配得到，那样边框和底色会静悄悄地不生效
+        self.setObjectName("ProjectCard")
+        # 纯 QWidget 不画样式表里的背景/边框，除非显式打开这个属性
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setCursor(
             Qt.CursorShape.PointingHandCursor
             if project is not None
@@ -88,7 +94,8 @@ class ProjectCard(QWidget):
         self.path_label = QLabel()
         wrap(self.path_label)
         text.addWidget(self.path_label)
-        text.addStretch(1)
+        # 不在卡片里留弹性空间：卡片必须贴着内容长，不然被拉高之后
+        # 名称在上、按钮在下，中间空一大片
         top.addLayout(text, 1)
         layout.addLayout(top)
 
@@ -118,6 +125,7 @@ class ProjectCard(QWidget):
             )
             self.btn_relocate.setVisible(True)
             self.btn_forget.setVisible(True)
+            self._paint_border()
             return
 
         self.name.setText(self.project.name or "未命名项目")
@@ -147,7 +155,7 @@ class ProjectCard(QWidget):
         colors = colors_for(self.palette())
         border = colors.accent_strong if self._hover else colors.border
         self.setStyleSheet(
-            "ProjectCard { border:1px solid %s; border-radius:8px; background:%s; }"
+            "#ProjectCard { border:1px solid %s; border-radius:8px; background:%s; }"
             % (border.name(), colors.surface.name())
         )
 
@@ -189,7 +197,6 @@ class ProjectListWidget(QWidget):
         title.setFont(QFont("", 11, QFont.Weight.Bold))
         header.addWidget(title)
         self.count_label = QLabel()
-        wrap(self.count_label)
         header.addWidget(self.count_label)
         header.addStretch(1)
         self.btn_new = QPushButton("新建项目…")
@@ -239,6 +246,14 @@ class ProjectListWidget(QWidget):
             card.relocate.connect(self._relocate)
             card.removed.connect(self._forget)
             self.cards.addWidget(card, index // COLUMNS, index % COLUMNS)
+
+        # 列等宽、最后一行贴顶：不然卡片会被 GridLayout 拉满整块可用高度
+        for column in range(COLUMNS):
+            self.cards.setColumnStretch(column, 1)
+        rows = (len(entries) + COLUMNS - 1) // COLUMNS
+        for row in range(max(rows, 1)):
+            self.cards.setRowStretch(row, 0)
+        self.cards.setRowStretch(max(rows, 1), 1)
 
         if not entries:
             hint = QLabel("还没有项目。新建一个，或把已有的项目目录添加进来。")

@@ -19,8 +19,13 @@ def wrapped_label(text: str = "") -> QLabel:
 
 
 def wrap(label: QLabel) -> QLabel:
-    """让已经建好的 QLabel 按可用宽度折行（理由见 `wrapped_label`）。"""
+    """让已经建好的 QLabel 按可用宽度折行（理由见 `wrapped_label`）。
+
+    顺带给一个很小的最小宽度：布局算"最小高度"时会按**最小宽度**去调
+    `heightForWidth`，宽度给 0 的意思就是"每个字占一行"，那一行会被撑到几百像素高。
+    """
     label.setWordWrap(True)
+    label.setMinimumWidth(80)
     label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     return label
 
