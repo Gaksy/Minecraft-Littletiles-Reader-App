@@ -265,9 +265,37 @@ class MainWindow(QMainWindow):
                 self._log("未启用任何素材：本次导出白模。")
                 return ""
         else:
-            self._log(
-                "沿用上次的素材选择：%s" % " → ".join(s.name for s in library.selected())
+            # 展示当前组合，并给一次"要不要改"的机会——直接闷头用上次的，
+            # 用户会不确定这次到底用了什么。
+            kept = library.selected()
+            box = QMessageBox(self)
+            box.setWindowTitle("本次使用的材质")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText("将按下面的顺序叠加（越靠下优先级越高）：")
+            box.setInformativeText(
+                "\n".join(
+                    "%d. %s（%s）" % (i + 1, s.name, s.kind_label)
+                    for i, s in enumerate(kept)
+                )
             )
+            change_button = box.addButton(
+                "更改材质…", QMessageBox.ButtonRole.ActionRole
+            )
+            ok_button = box.addButton(
+                "就这样导出", QMessageBox.ButtonRole.AcceptRole
+            )
+            box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is change_button:
+                manager = MaterialManagerDialog(APP_DIR, self)
+                if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
+                    return None
+                library = manager.library
+                if not library.selected():
+                    self._log("未启用任何素材：本次导出白模。")
+                    return ""
+            elif box.clickedButton() is not ok_button:
+                return None
 
         progress = busy_dialog("材质组合", "正在按启用顺序组合素材…", self)
         try:
@@ -300,7 +328,7 @@ class MainWindow(QMainWindow):
         bar = self.menuBar()
 
         materials = bar.addMenu("素材(&M)")
-        materials.addAction("材质管理…", self._open_materials)
+        self.action_materials = materials.addAction("材质管理…", self._open_materials)
         materials.addAction("区块选择说明…", self._show_help)
 
         output = bar.addMenu("输出(&O)")
@@ -333,6 +361,13 @@ class MainWindow(QMainWindow):
 
     def _open_materials(self) -> None:
         """管理素材（导入 / 启用 / 排序）。改完下次导出自动生效。"""
+        # 导出进行中不许改素材：组合结果是那次导出正在用的东西，中途换掉会让
+        # 产物一半用旧素材、一半用新素材。
+        if self.runner.is_running:
+            QMessageBox.information(
+                self, "导出进行中", "导出任务还没结束，现在不能更改素材。"
+            )
+            return
         manager = MaterialManagerDialog(APP_DIR, self)
         if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
             return
@@ -342,6 +377,25 @@ class MainWindow(QMainWindow):
             % (" → ".join(s.name for s in chosen) if chosen else "（无，导出白模）")
         )
         self._refresh_status()
+        # 有变动就立刻重新组合：组合按顺序指纹缓存，没变是毫秒级命中，
+        # 变了正好在用户还在看界面时把它算完，别拖到导出那一刻。
+        if chosen:
+            progress = busy_dialog("材质组合", "素材有变动，正在重新组合…", self)
+            try:
+                composed = compose(APP_DIR, manager.library)
+            except ComposeError as error:
+                QMessageBox.warning(self, "组合不了", str(error))
+                return
+            finally:
+                progress.close()
+            self._log(
+                "  组合完成: %s（%s%s）"
+                % (
+                    composed.package_dir.name,
+                    composed.note,
+                    "，复用上次结果" if composed.reused else "",
+                )
+            )
 
     def _import_assets_file(self) -> str | None:
         """选一个 zip / rar / jar，应用自己判断是什么并整理成素材包。

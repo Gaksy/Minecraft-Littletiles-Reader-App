@@ -71,18 +71,23 @@ class MaterialManagerDialog(QDialog):
         import_button = QPushButton("导入 zip / rar / jar…")
         import_button.clicked.connect(self._import)
         left_box.addWidget(import_button)
+        # 删除是"从素材库里移除"，属于左列的事；放右边会让人以为删的是"本次启用"
+        self.btn_remove = QPushButton("从库中删除…")
+        self.btn_remove.clicked.connect(self._remove_from_library)
+        left_box.addWidget(self.btn_remove)
         columns.addLayout(left_box)
 
         middle = QVBoxLayout()
         middle.addStretch(1)
-        for label, slot in (
-            ("启用 →", self._enable_selected),
-            ("← 停用", self._disable_selected),
-            ("上移 ↑", lambda: self._move(-1)),
-            ("下移 ↓", lambda: self._move(1)),
+        for name, label, slot in (
+            ("btn_enable", "启用 →", self._enable_selected),
+            ("btn_disable", "← 停用", self._disable_selected),
+            ("btn_up", "上移 ↑", lambda: self._move(-1)),
+            ("btn_down", "下移 ↓", lambda: self._move(1)),
         ):
             button = QPushButton(label)
             button.clicked.connect(slot)
+            setattr(self, name, button)
             middle.addWidget(button)
         middle.addStretch(1)
         columns.addLayout(middle)
@@ -91,9 +96,6 @@ class MaterialManagerDialog(QDialog):
         right_box.addWidget(QLabel("本次启用（上 → 下 = 优先级递增）"))
         self.selected = self._make_list()
         right_box.addWidget(self.selected)
-        remove_button = QPushButton("从库中删除…")
-        remove_button.clicked.connect(self._remove_from_library)
-        right_box.addWidget(remove_button)
         columns.addLayout(right_box)
 
         self.status = QLabel()
@@ -114,7 +116,27 @@ class MaterialManagerDialog(QDialog):
         view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         view.setMinimumWidth(260)
         view.setMinimumHeight(220)
+        view.itemSelectionChanged.connect(self._update_buttons)
         return view
+
+    def _update_buttons(self) -> None:
+        """按当前选择决定哪些能点——点不动的时候就该是灰的。"""
+        has_left = bool(self.available.selectedItems())
+        has_right = bool(self.selected.selectedItems())
+        self.btn_enable.setEnabled(has_left)
+        self.btn_disable.setEnabled(has_right)
+        self.btn_remove.setEnabled(has_left)      # 只有左列能删
+
+        rows = sorted(self.selected.row(item) for item in self.selected.selectedItems())
+        # 原版钉在 0，所以上移的下界是 1
+        base = self.library.base
+        pinned = (
+            base is not None
+            and bool(self.library.enabled)
+            and self.library.enabled[0] == base.id
+        )
+        self.btn_up.setEnabled(bool(rows) and min(rows) > (1 if pinned else 0))
+        self.btn_down.setEnabled(bool(rows) and max(rows) < self.selected.count() - 1)
 
     # ---- 列表刷新 --------------------------------------------------------
 
@@ -144,6 +166,7 @@ class MaterialManagerDialog(QDialog):
                 "底包：%s　启用 %d 项"
                 % (base.name, len(self.library.selected()))
             )
+        self._update_buttons()
 
     def _selected_ids(self, view: QListWidget) -> list[str]:
         return [
@@ -202,7 +225,8 @@ class MaterialManagerDialog(QDialog):
             )
 
     def _remove_from_library(self) -> None:
-        ids = self._selected_ids(self.selected) or self._selected_ids(self.available)
+        # 只认左列的选择：右列是"本次启用"，不是"要删的东西"
+        ids = self._selected_ids(self.available)
         if not ids:
             return
         names = ", ".join(
