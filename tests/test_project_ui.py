@@ -41,6 +41,7 @@ from app.records import (  # noqa: E402
     mca_stamp,
     region_file,
 )
+from app.retention import plan as retention_plan  # noqa: E402
 from app.storage import categories, dir_size, human_size  # noqa: E402
 from app.texture_library import absorb, library_path, orphans, prune  # noqa: E402
 from app.ui import project_window as pwin  # noqa: E402
@@ -188,11 +189,99 @@ def test_texture_library(tmp: Path) -> None:
 # ---- 4. 离屏界面结构 --------------------------------------------------------
 
 
+def test_retention(tmp: Path) -> None:
+    print("保留策略：")
+    from datetime import datetime
+
+    records = [
+        ExportRecord(
+            id="r%d" % i, kind="region", name="r%d" % i,
+            created_at="2026-09-%02d 01:00:00" % (10 + i), output_dir="outputs/r%d" % i,
+        )
+        for i in range(4)
+    ]
+    sizes = {"r0": 100, "r1": 200, "r2": 300, "r3": 400}
+
+    check("默认什么都不清", retention_plan(records, sizes=sizes).is_empty)
+
+    plan = retention_plan(records, keep=2, sizes=sizes)
+    check("只保留最近 2 次 → 删最旧的两个", plan.victims == ["r0", "r1"], str(plan.victims))
+    check("算出能释放多少", plan.freed == 300, str(plan.freed))
+    check("理由写得出来", "只保留最近 2 次" in plan.render())
+
+    plan = retention_plan(
+        records, max_days=5, sizes=sizes, now=datetime(2026, 9, 16, 12, 0, 0)
+    )
+    check("超过 5 天 → 删更早的那两次",
+          plan.victims == ["r0", "r1"], str(plan.victims))
+    plan = retention_plan(
+        records, max_days=30, sizes=sizes, now=datetime(2026, 9, 20, 12, 0, 0)
+    )
+    check("都在期限内 → 不删", plan.is_empty)
+
+    megabyte = 1024 * 1024
+    plan = retention_plan(records, max_size_mb=3, sizes={k: megabyte for k in sizes})
+    check("4 MB 限 3 MB → 从最旧的腾一个", plan.victims == ["r0"], str(plan.victims))
+    plan = retention_plan(records, max_size_mb=2, sizes={k: megabyte for k in sizes})
+    check("4 MB 限 2 MB → 腾两个才够", plan.victims == ["r0", "r1"], str(plan.victims))
+
+    plan = retention_plan(records, keep=3, max_size_mb=2, sizes={k: megabyte for k in sizes})
+    check("多条规则一起命中不会重复计",
+          sorted(plan.victims) == ["r0", "r1"], str(plan.victims))
+
+
+def test_retention_ui(tmp: Path) -> None:
+    print("按策略清理（离屏）：")
+    project = Project.create(tmp / "retention-demo", "保留演示")
+    store = RecordStore(project.path)
+    for index in range(4):
+        out_dir = project.path / "outputs" / ("2026-09-1%d_0100_r%d" % (index, index))
+        out_dir.mkdir(parents=True)
+        (out_dir / "a.obj").write_bytes(b"x" * 1000)
+        store.add(
+            ExportRecord(
+                id=out_dir.name, kind="region", name="r%d" % index,
+                created_at="2026-09-%02d 01:00:00" % (10 + index),
+                output_dir="outputs/%s" % out_dir.name,
+            )
+        )
+    project.keep_exports = 2
+    project.save()
+
+    config = AppConfig()
+    config.save = lambda path=None: tmp / "app.json"
+    window = ProjectWindow(project, config, tmp, None)
+    window.show()
+    QApplication.instance().processEvents()
+
+    plan = window._retention_plan()
+    check("策略算出要清两次", len(plan.victims) == 2, str(plan.victims))
+    check("界面上提示了可清理", "可清理 2 次" in window.retention_label.text(),
+          window.retention_label.text())
+
+    window._apply_retention(plan)
+    survivors = RecordStore(project.path).records
+    check("记录只剩 2 条", len(survivors) == 2, str(len(survivors)))
+    check("最旧的两个产物目录被删了",
+          not (project.path / "outputs" / "2026-09-10_0100_r0").exists()
+          and not (project.path / "outputs" / "2026-09-11_0100_r1").exists())
+    check("新的两个还在",
+          (project.path / "outputs" / "2026-09-12_0100_r2").is_dir()
+          and (project.path / "outputs" / "2026-09-13_0100_r3").is_dir())
+    check("历史表跟着刷新了", window.history.rowCount() == 2)
+    window.close()
+
+
 def test_window(tmp: Path) -> None:
     print("项目界面（离屏）：")
     project = Project.create(tmp / "window-demo", "界面演示")
     project.description = "看看长什么样"
     project.save()
+    # 造一份备份，验证"管理备份"能看到它
+    save_root = tmp / "某个存档"
+    save_root.mkdir(parents=True, exist_ok=True)
+    (save_root / "level.dat").write_bytes(b"level")
+    project.backup_save(save_root, note="演示")
     config = AppConfig()
     config.save = lambda path=None: tmp / "app.json"      # 别写进仓库
     window = ProjectWindow(project, config, tmp, None)
@@ -201,8 +290,12 @@ def test_window(tmp: Path) -> None:
     QApplication.instance().processEvents()
 
     for name in ("btn_export_region", "btn_export_snbt", "btn_backup", "btn_query",
-                 "btn_recompose", "storage_bar", "storage_legend", "history"):
+                 "btn_recompose", "btn_backups", "btn_rebuild", "btn_retention",
+                 "storage_bar", "storage_legend", "history"):
         check("有 %s" % name, hasattr(window, name))
+    check("备份被列出来了", "已备份 1 次" in window.backup_label.text(),
+          window.backup_label.text())
+    check("存档备份打进 zip 了", len(project.backups()) == 1 and project.backups()[0].is_file())
     check("没有素材时提示白模", "白模" in window.package_status.text(),
           window.package_status.text())
     check("内容没有溢出（不出现整页横向滚动）",
@@ -359,6 +452,31 @@ def test_real_export(tmp: Path, seen: list[tuple[str, str, str]]) -> None:
 
     keys = [c.key for c in categories(project.path)]
     check("体积统计里有导出与贴图", "outputs" in keys and "textures" in keys, str(keys))
+
+    # ---- 贴图丢了能不能重建（§7.6：清理是安全的，丢的是算力能买回来的东西）----
+    print("重建贴图：")
+    victim = record.textures[0]
+    library_path(project.path, victim).unlink()
+    check("先弄丢一张贴图", not library_path(project.path, victim).is_file())
+    window.history.selectRow(0)
+    window._rebuild_selected()
+    rebuild_loop = QEventLoop()
+    window.panel.finished_ok.connect(lambda *_: rebuild_loop.quit())
+    QTimer.singleShot(120_000, rebuild_loop.quit)
+    if window.panel.runner.is_running:
+        rebuild_loop.exec()
+    QApplication.instance().processEvents()
+
+    check("重建后贴图回到库里", library_path(project.path, victim).is_file())
+    rebuilt = RecordStore(project.path).by_id(record.id)
+    check("记录还在", rebuilt is not None)
+    check("记录里的贴图清单没缺",
+          rebuilt is not None
+          and all(library_path(project.path, d).is_file() for d in rebuilt.textures),
+          str(len(rebuilt.textures) if rebuilt else 0))
+    tmp_dir = project.path / "tmp"
+    check("重建的临时目录没留下",
+          not tmp_dir.exists() or not any(tmp_dir.iterdir()))
     window.close()
 
 
@@ -398,6 +516,8 @@ def main() -> int:
         test_records(root / "t1")
         test_storage(root / "t2")
         test_texture_library(root / "t3")
+        test_retention(root / "t4a")
+        test_retention_ui(root / "t4b")
         test_window(root / "t4")
         test_real_export(root / "t5", seen)
     print("弹窗：")

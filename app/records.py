@@ -254,14 +254,14 @@ class RecordStore:
             if record is not None:
                 target = self.project_dir / record.output_dir
                 # 产物目录必须确实在项目目录里——记录是可以被手改成 "../.." 的
-                if _is_inside(target, self.project_dir) and target.is_dir():
+                if is_inside(target, self.project_dir) and target.is_dir():
                     shutil.rmtree(target, ignore_errors=True)
                 removed += 1
         self.remove(record_ids)
         return removed
 
 
-def _is_inside(target: Path, root: Path) -> bool:
+def is_inside(target: Path, root: Path) -> bool:
     """target 是不是 root 里的东西（防止记录被改坏之后删到项目目录外面）。"""
     try:
         target.resolve().relative_to(root.resolve())

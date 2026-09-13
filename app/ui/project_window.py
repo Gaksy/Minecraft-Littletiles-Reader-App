@@ -19,14 +19,16 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QEventLoop, QThread, Qt, Signal
+from PySide6.QtCore import QEvent, QEventLoop, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -72,11 +74,13 @@ from ..records import (
     STATE_LABELS,
     ExportRecord,
     RecordStore,
+    is_inside,
     stamps_for,
 )
+from ..retention import plan as retention_plan, policy_active
 from ..storage import categories, human_size, percent
-from ..texture_library import absorb, orphans, prune
 from ..storage import CATEGORY_PATHS
+from ..texture_library import absorb, library_path, orphans, prune
 from .chunk_grid import ChunkStateGrid
 from .export_dialog import ExportRegionDialog
 from .export_panel import ExportPanel
@@ -194,6 +198,157 @@ class _PasteSnbtDialog(QDialog):
 
     def snbt(self) -> str:
         return self.text.toPlainText()
+
+
+class _BackupsDialog(QDialog):
+    """存档备份的副本管理：看清单、打开、删（§7.7：删之前先把释放多少说清楚）。"""
+
+    def __init__(self, project: Project, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("存档备份")
+        self._project = project
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "每次备份都是**整个存档**打成的 zip，放在 <项目>/inputs/saves/。\n"
+            "删掉只是删这份备份，你的存档本身不受影响。"
+        )
+        wrap(hint)
+        layout.addWidget(hint)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["时间", "名字", "大小"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setMinimumSize(520, 240)
+        layout.addWidget(self.table)
+
+        row = QHBoxLayout()
+        self.btn_open = QPushButton("打开所在目录")
+        self.btn_open.clicked.connect(self._open_folder)
+        self.btn_delete = QPushButton("删除选中…")
+        self.btn_delete.clicked.connect(self._delete)
+        row.addWidget(self.btn_open)
+        row.addWidget(self.btn_delete)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        backups = self._project.backups()
+        self.table.setRowCount(len(backups))
+        for row, item in enumerate(backups):
+            size = item.stat().st_size if item.is_file() else 0
+            for column, text in enumerate(
+                (item.name.split("_")[0], item.name, human_size(size))
+            ):
+                cell = QTableWidgetItem(text)
+                cell.setData(Qt.ItemDataRole.UserRole, str(item))
+                self.table.setItem(row, column, cell)
+        self.table.resizeColumnsToContents()
+        has = bool(backups)
+        self.btn_open.setEnabled(has)
+        self.btn_delete.setEnabled(has)
+
+    def _selected(self) -> list[Path]:
+        result = []
+        for index in self.table.selectionModel().selectedRows():
+            cell = self.table.item(index.row(), 0)
+            if cell is not None:
+                result.append(Path(cell.data(Qt.ItemDataRole.UserRole)))
+        return result
+
+    def _open_folder(self) -> None:
+        from .export_panel import default_open_directory
+
+        folder = self._project.path / "inputs" / "saves"
+        if folder.is_dir():
+            default_open_directory(folder)
+
+    def _delete(self) -> None:
+        targets = [item for item in self._selected() if item.is_file()]
+        if not targets:
+            return
+        freed = sum(item.stat().st_size for item in targets)
+        if (
+            QMessageBox.question(
+                self,
+                "删除备份",
+                "删掉这 %d 份备份？\n\n将释放约 %s。存档本身不受影响。"
+                % (len(targets), human_size(freed)),
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        for item in targets:
+            item.unlink(missing_ok=True)
+        logger().info("删除存档备份：%d 份，释放 %d 字节", len(targets), freed)
+        self._refresh()
+
+
+class _RetentionDialog(QDialog):
+    """保留策略：只保留最近 N 次 / 超过 X 天 / 总大小上限。默认一条都不开。"""
+
+    def __init__(self, project: Project, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("保留策略")
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "默认什么都不自动删。下面几条按需打开——命中的旧导出会连产物目录一起清理，\n"
+            "记录索引与 SNBT 输入副本永远保留。"
+        )
+        wrap(hint)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        self.keep = QSpinBox()
+        self.keep.setRange(0, 9999)
+        self.keep.setSpecialValueText("不限")
+        self.keep.setSuffix(" 次")
+        self.keep.setValue(int(project.keep_exports or 0))
+        form.addRow("只保留最近", self.keep)
+
+        self.days = QSpinBox()
+        self.days.setRange(0, 3650)
+        self.days.setSpecialValueText("不限")
+        self.days.setSuffix(" 天")
+        self.days.setValue(int(project.keep_days or 0))
+        form.addRow("只保留最近", self.days)
+
+        self.size = QSpinBox()
+        self.size.setRange(0, 1024 * 1024)
+        self.size.setSpecialValueText("不限")
+        self.size.setSuffix(" MB")
+        self.size.setValue(int(project.keep_size_mb or 0))
+        form.addRow("总大小不超过", self.size)
+        layout.addLayout(form)
+
+        self.auto = QCheckBox("打开项目时自动按策略清理（会先问一次）")
+        self.auto.setChecked(bool(project.auto_clean))
+        layout.addWidget(self.auto)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+
+    def values(self) -> dict:
+        return {
+            "keep_exports": self.keep.value(),
+            "keep_days": self.days.value(),
+            "keep_size_mb": self.size.value(),
+            "auto_clean": self.auto.isChecked(),
+        }
 
 
 class _ChunkQueryDialog(QDialog):
@@ -364,12 +519,15 @@ class ProjectWindow(QMainWindow):
         self.app_dir = Path(app_dir or APP_DIR)
         self.store = RecordStore(project.path)
         self._pending: ExportRecord | None = None
+        self._rebuild_record: ExportRecord | None = None
         self._force_recompose = False
 
         self.setWindowTitle("项目 · %s" % project.name)
         self.resize(1000, 760)
         self._build_ui()
         self._refresh_all()
+        # 保留策略要在窗口显示之后再问（构造期间弹模态框，父窗口还没出来）
+        QTimer.singleShot(0, self._auto_clean_if_needed)
         logger().info("打开项目：%s（%s）", project.name, project.path)
 
     # ---- 界面 ------------------------------------------------------------
@@ -486,12 +644,16 @@ class ProjectWindow(QMainWindow):
         self.btn_backup = QPushButton("备份存档…")
         self.btn_backup.setToolTip("把整个存档打成一个 zip 存进项目目录（inputs/saves/）")
         self.btn_backup.clicked.connect(self._backup_save)
+        self.btn_backups = QPushButton("管理备份…")
+        self.btn_backups.setToolTip("看已有的备份、打开、删掉不想留的")
+        self.btn_backups.clicked.connect(self._manage_backups)
         self.backup_label = QLabel()
         wrap(self.backup_label)
         self.backup_label.setStyleSheet(
             "color:%s;" % colors_for(self.palette()).muted.name()
         )
         backup_row.addWidget(self.btn_backup)
+        backup_row.addWidget(self.btn_backups)
         backup_row.addWidget(self.backup_label, 1)
         layout.addLayout(backup_row)
         return box
@@ -524,9 +686,9 @@ class ProjectWindow(QMainWindow):
         box = QGroupBox("历史记录")
         layout = QVBoxLayout(box)
 
-        self.history = QTableWidget(0, 6)
+        self.history = QTableWidget(0, 7)
         self.history.setHorizontalHeaderLabels(
-            ["时间", "类型", "名称", "区块", "面数", "大小"]
+            ["时间", "类型", "名称", "区块", "面数", "贴图", "大小"]
         )
         self.history.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -545,6 +707,7 @@ class ProjectWindow(QMainWindow):
         for name, label, slot in (
             ("btn_open_output", "打开产物目录", self._open_selected_output),
             ("btn_open_job", "打开 job.json", self._open_selected_job),
+            ("btn_rebuild", "重建贴图…", self._rebuild_selected),
             ("btn_query", "查询区块…", self._query_chunks),
             ("btn_forget", "只删记录", self._forget_selected),
             ("btn_delete", "连产物一起删…", self._delete_selected),
@@ -579,10 +742,23 @@ class ProjectWindow(QMainWindow):
         self.btn_prune.clicked.connect(self._prune_textures)
         self.btn_clean_outputs = QPushButton("清理旧产物…")
         self.btn_clean_outputs.clicked.connect(self._clean_outputs)
+        self.btn_retention = QPushButton("保留策略…")
+        self.btn_retention.setToolTip(
+            "只保留最近 N 次 / 超过 X 天 / 总大小上限；默认什么都不自动删"
+        )
+        self.btn_retention.clicked.connect(self._edit_retention)
         row.addWidget(self.btn_prune)
         row.addWidget(self.btn_clean_outputs)
+        row.addWidget(self.btn_retention)
         row.addStretch(1)
         layout.addLayout(row)
+
+        self.retention_label = QLabel()
+        wrap(self.retention_label)
+        self.retention_label.setStyleSheet(
+            "color:%s;" % colors_for(self.palette()).muted.name()
+        )
+        layout.addWidget(self.retention_label)
         return box
 
     def storage_legend_hover(self, index: int) -> None:
@@ -601,6 +777,11 @@ class ProjectWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
+
+        materials = bar.addMenu("素材(&M)")
+        materials.addAction("材质管理…", self._open_material_manager)
+        materials.addAction("添加素材到本项目…", self._add_materials)
+
         project_menu = bar.addMenu("项目(&P)")
         project_menu.addAction("打开项目目录", lambda: self._open_path(self.project.path))
         project_menu.addAction("导出项目配置…", self._export_config)
@@ -718,6 +899,7 @@ class ProjectWindow(QMainWindow):
                 record.name,
                 record.chunk_text(),
                 str(record.faces or "—"),
+                self._texture_summary(record),
                 human_size(record.size_bytes(self.project.path)),
             ]
             for column, text in enumerate(values):
@@ -725,10 +907,24 @@ class ProjectWindow(QMainWindow):
             self.history.item(row, 0).setData(Qt.ItemDataRole.UserRole, record.id)
         self.history.resizeColumnsToContents()
         has_rows = bool(records)
-        for name in ("btn_open_output", "btn_open_job", "btn_forget", "btn_delete"):
+        for name in ("btn_open_output", "btn_open_job", "btn_forget", "btn_delete",
+                     "btn_rebuild"):
             getattr(self, name).setEnabled(has_rows)
         self.btn_forget.setEnabled(has_rows)
         self.btn_delete.setEnabled(has_rows)
+
+    def _texture_summary(self, record: ExportRecord) -> str:
+        """这条记录的贴图还在不在——不在就要靠「重建贴图」补回来。"""
+        if not record.textures:
+            return "—"
+        missing = [
+            digest
+            for digest in record.textures
+            if not library_path(self.project.path, digest).is_file()
+        ]
+        if missing:
+            return "%d 张（缺 %d）" % (len(record.textures), len(missing))
+        return "%d 张" % len(record.textures)
 
     def _refresh_storage(self) -> None:
         items = categories(self.project.path)
@@ -752,6 +948,7 @@ class ProjectWindow(QMainWindow):
             )
         else:
             self.storage_total.setText("这个项目还什么都没有。")
+        self._refresh_retention()
 
     # ---- 基本配置 --------------------------------------------------------
 
@@ -822,6 +1019,30 @@ class ProjectWindow(QMainWindow):
         self._refresh_all()
 
     # ---- 素材 ------------------------------------------------------------
+
+    def _open_material_manager(self) -> None:
+        """打开素材库管理（导入 / 启用 / 排序）。项目里的绑定是另一件事。"""
+        from .material_manager import MaterialManagerDialog
+
+        if self.panel.runner.is_running:
+            QMessageBox.information(
+                self, "导出进行中", "导出任务还没结束，现在不能更改素材库。"
+            )
+            return
+        before = list(Library.load(self.app_dir).enabled)
+        dialog = MaterialManagerDialog(self.app_dir, self)
+        if dialog.exec() != MaterialManagerDialog.DialogCode.Accepted:
+            return
+        after = list(dialog.library.enabled)
+        if before != after:
+            # 素材库的启用列表变了：本项目绑定的东西可能跟着变，组合要重做
+            self._force_recompose = True
+        self.panel.log_line(
+            "素材库已更新：%s" % (" → ".join(after) if after else "（没有启用任何素材）")
+        )
+        self._refresh_bindings()
+        self._refresh_package_status()
+        self._refresh_storage()
 
     def _add_materials(self) -> None:
         library = Library.load(self.app_dir)
@@ -1098,6 +1319,9 @@ class ProjectWindow(QMainWindow):
         return str(package)
 
     def _on_export_finished(self, ok: bool, result: dict) -> None:
+        if self._rebuild_record is not None:
+            self._finish_rebuild(ok, result)
+            return
         pending = self._pending
         self._pending = None
         if pending is None:
@@ -1126,6 +1350,104 @@ class ProjectWindow(QMainWindow):
         pending.seconds = float(result.get("seconds") or 0.0)
         self.store.add(pending)
         self.panel.log_line("已记入历史：%s" % pending.id)
+        self._refresh_history()
+        self._refresh_storage()
+
+    # ---- 重建贴图 --------------------------------------------------------
+    #
+    # 清理是有底线的：删掉的只能是"算力能买回来的东西"（§7.6）。所以每次导出都把
+    # 当时的 job.json 留在产物目录里，贴图没了就照着它重跑一遍，把图补回库里。
+
+    def _rebuild_selected(self) -> None:
+        records = self._selected_records()
+        if not records:
+            return
+        record = records[0]
+        job_path = self.project.path / (
+            record.job or (record.output_dir + "/job.json")
+        )
+        if not job_path.is_file():
+            QMessageBox.information(
+                self,
+                "重建不了",
+                "这条记录没有留下 job.json（只有项目模式下导出才会留），\n"
+                "没法精确重建当时那套输入。",
+            )
+            return
+        package = self.project.package_dir
+        if not (package / "block_textures.tsv").is_file():
+            QMessageBox.information(
+                self,
+                "重建不了",
+                "项目里还没有素材包（%s）。\n\n先在「素材」里绑定素材并组合一次，"
+                "重建要靠它。" % package,
+            )
+            return
+        try:
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            QMessageBox.warning(self, "重建不了", "job.json 读不出来：%s" % error)
+            return
+
+        missing = [
+            digest
+            for digest in record.textures
+            if not library_path(self.project.path, digest).is_file()
+        ]
+        if record.textures and not missing and (
+            QMessageBox.question(
+                self, "贴图都在", "这条记录用到的贴图在库里都还在，还要重跑一遍吗？"
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        # 输出到项目里的临时目录：重建只为贴图，不该覆盖原来的产物
+        stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        temp_dir = self.project.path / "tmp" / ("rebuild_%s" % stamp)
+        output = dict(job.get("output") or {})
+        output["dir"] = str(temp_dir)
+        job["output"] = output
+        job["assets"] = {"package": str(package)}
+        self._rebuild_record = record
+        self.panel.log_line(
+            "重建贴图：%s（记录 %d 张，缺 %d 张）"
+            % (record.id, len(record.textures), len(missing))
+        )
+        if not self.panel.run(job, _cli_path(self.config)):
+            self._rebuild_record = None
+
+    def _finish_rebuild(self, ok: bool, result: dict) -> None:
+        record = self._rebuild_record
+        self._rebuild_record = None
+        if record is None:
+            return
+        obj = result.get("obj") if ok else None
+        if not obj:
+            self.panel.log_line("重建失败：没有产出，记录保持不变。")
+            return
+        obj_path = Path(str(obj))
+        try:
+            absorbed = run_in_background(
+                self,
+                "重建贴图",
+                "正在把重新烘焙的贴图收进项目贴图库…",
+                lambda: absorb(self.project.path, obj_path),
+            )
+        except Exception as error:
+            logger().exception("重建贴图失败：%s", record.id)
+            QMessageBox.warning(self, "重建失败", str(error))
+            return
+        before = len(record.textures)
+        record.textures = sorted(set(record.textures) | set(absorbed))
+        self.store.add(record)
+        # 重建用的临时产物没有价值：贴图已经进库了
+        if is_inside(obj_path.parent, self.project.path):
+            shutil.rmtree(obj_path.parent, ignore_errors=True)
+        self.panel.log_line(
+            "重建完成：记录里现在有 %d 张贴图（原有 %d 张，这次补回 %d 张）"
+            % (len(record.textures), before, len(record.textures) - before)
+        )
         self._refresh_history()
         self._refresh_storage()
 
@@ -1197,6 +1519,81 @@ class ProjectWindow(QMainWindow):
         _ChunkQueryDialog(self.project, self.store, self).exec()
 
     # ---- 存储与清理 ------------------------------------------------------
+
+    def _retention_sizes(self) -> dict:
+        return {
+            record.id: record.size_bytes(self.project.path)
+            for record in self.store.records
+        }
+
+    def _retention_plan(self):
+        return retention_plan(
+            self.store.records,
+            keep=int(self.project.keep_exports or 0),
+            max_days=int(self.project.keep_days or 0),
+            max_size_mb=int(self.project.keep_size_mb or 0),
+            sizes=self._retention_sizes(),
+        )
+
+    def _refresh_retention(self) -> None:
+        if not policy_active(
+            int(self.project.keep_exports or 0),
+            int(self.project.keep_days or 0),
+            int(self.project.keep_size_mb or 0),
+        ):
+            self.retention_label.setText("保留策略：不自动清理（只按你点的按钮删）。")
+            self.btn_clean_outputs.setToolTip("只保留最近 N 次，其余连产物一起删")
+            return
+        plan = self._retention_plan()
+        if plan.is_empty:
+            self.retention_label.setText("保留策略：已生效，当前没有需要清理的导出。")
+        else:
+            self.retention_label.setText(
+                "保留策略：可清理 %d 次旧导出，约 %s（打开「保留策略…」可调整，"
+                "或点「清理旧产物…」现在清）"
+                % (len(plan.victims), human_size(plan.freed))
+            )
+
+    def _edit_retention(self) -> None:
+        dialog = _RetentionDialog(self.project, self)
+        if dialog.exec() != _RetentionDialog.DialogCode.Accepted:
+            return
+        for key, value in dialog.values().items():
+            setattr(self.project, key, value)
+        self.project.save()
+        self._refresh_retention()
+        plan = self._retention_plan()
+        if not plan.is_empty and (
+            QMessageBox.question(
+                self, "按策略清理", plan.render() + "\n\n现在就清理吗？"
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
+            self._apply_retention(plan)
+
+    def _apply_retention(self, plan) -> None:
+        removed = self.store.remove_with_outputs(list(plan.victims))
+        # 产物没了，贴图库里可能多出没人引用的图——顺手回收，不然越攒越多
+        freed_textures = prune(self.project.path, self.store.records)
+        self.panel.log_line(
+            "按保留策略清理：%d 次导出，约 %s；另回收贴图 %d 张"
+            % (removed, human_size(plan.freed), freed_textures[0])
+        )
+        self._refresh_history()
+        self._refresh_storage()
+
+    def _auto_clean_if_needed(self) -> None:
+        """打开项目时按策略问一次（`auto_clean` 打开才走这里）。"""
+        if not self.project.auto_clean:
+            return
+        plan = self._retention_plan()
+        if plan.is_empty:
+            return
+        if (
+            QMessageBox.question(self, "保留策略", plan.render() + "\n\n现在清理吗？")
+            == QMessageBox.StandardButton.Yes
+        ):
+            self._apply_retention(plan)
 
     def _open_category(self, key: str) -> None:
         for child in CATEGORY_PATHS.get(key, ()):
@@ -1301,6 +1698,11 @@ class ProjectWindow(QMainWindow):
             return
         self.panel.log_line("存档已备份：%s" % archive)
         self._refresh_all()
+
+    def _manage_backups(self) -> None:
+        dialog = _BackupsDialog(self.project, self)
+        dialog.exec()
+        self._refresh_all()          # 删过备份之后数字要跟着变
 
     def _export_config(self) -> None:
         suggested = "%s.ltrproject.zip" % (self.project.name or "project")

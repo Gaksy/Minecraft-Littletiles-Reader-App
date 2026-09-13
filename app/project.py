@@ -42,6 +42,11 @@ class Project:
     save_root: str = ""                # 本项目默认存档根目录（含 level.dat）
     package_fingerprint: str = ""      # <项目>/package 是哪次组合的结果
     options: dict = field(default_factory=dict)          # 上次用过的导出选项
+    # 保留策略（§7.7）：默认全 0 = 什么都不自动删
+    keep_exports: int = 0              # 只保留最近 N 次导出；0 = 不限
+    keep_days: int = 0                 # 只保留最近 X 天；0 = 不限
+    keep_size_mb: int = 0              # 总大小上限（MB）；0 = 不限
+    auto_clean: bool = False           # 打开项目时按策略自动清理（会先问一次）
     created_at: str = ""
     updated_at: str = ""
     directory: str = ""                # 项目目录（绝对路径）
