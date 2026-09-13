@@ -282,26 +282,18 @@ class MainWindow(QMainWindow):
         要改就点主界面的「材质管理…」。组合按顺序指纹缓存，没变就是毫秒级命中。
         """
         library = Library.load(APP_DIR)
-        if not library.sources:
-            # 库里还什么都没有：先说明要什么、并给"不用材质"的出口。
-            dialog = MaterialChoiceDialog("", self)
-            if dialog.exec() != MaterialChoiceDialog.DialogCode.Accepted:
-                return None
-            if dialog.choice == "none":
-                self._log("本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。")
-                return ""
-            if dialog.choice == "manage":
-                manager = MaterialManagerDialog(APP_DIR, self)
-                if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
-                    return None
-                library = manager.library
-                if not library.selected():
-                    self._log("未启用任何素材：本次导出白模。")
-                    return ""
-                return self._compose_assets(library)
-
-        if not library.selected():
-            # 有素材但一个都没启用 → 才需要打开管理界面
+        kept = library.selected()
+        # 每次导出都问一句，三选一：继续用上次 / 去材质管理 / 不用材质（白模）。
+        # 有"上次"才出现第一个按钮；一次都没配过时只剩后两条路。
+        dialog = MaterialChoiceDialog(
+            " → ".join(s.name for s in kept) if kept else "", self
+        )
+        if dialog.exec() != MaterialChoiceDialog.DialogCode.Accepted:
+            return None
+        if dialog.choice == "none":
+            self._log("本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。")
+            return ""
+        if dialog.choice == "manage":
             manager = MaterialManagerDialog(APP_DIR, self)
             if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
                 return None
@@ -310,38 +302,7 @@ class MainWindow(QMainWindow):
                 self._log("未启用任何素材：本次导出白模。")
                 return ""
         else:
-            # 展示当前组合，并给一次"要不要改"的机会——直接闷头用上次的，
-            # 用户会不确定这次到底用了什么。
-            kept = library.selected()
-            box = QMessageBox(self)
-            box.setWindowTitle("本次使用的材质")
-            box.setIcon(QMessageBox.Icon.Question)
-            box.setText("将按下面的顺序叠加（越靠下优先级越高）：")
-            box.setInformativeText(
-                "\n".join(
-                    "%d. %s（%s）" % (i + 1, s.name, s.kind_label)
-                    for i, s in enumerate(kept)
-                )
-            )
-            change_button = box.addButton(
-                "更改材质…", QMessageBox.ButtonRole.ActionRole
-            )
-            ok_button = box.addButton(
-                "就这样导出", QMessageBox.ButtonRole.AcceptRole
-            )
-            box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-            box.exec()
-            if box.clickedButton() is change_button:
-                manager = MaterialManagerDialog(APP_DIR, self)
-                if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
-                    return None
-                library = manager.library
-                if not library.selected():
-                    self._log("未启用任何素材：本次导出白模。")
-                    return ""
-            elif box.clickedButton() is not ok_button:
-                return None
-
+            self._log("继续使用上次的材质：%s" % " → ".join(s.name for s in kept))
         return self._compose_assets(library)
 
     def _compose_assets(self, library) -> str | None:

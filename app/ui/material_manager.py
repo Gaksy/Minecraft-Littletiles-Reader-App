@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..library import KIND_LABELS, Library, import_source
+from ..applog import logger
 from ..sources import ARCHIVE_SUFFIXES
 from .theme import colors_for
 
@@ -262,6 +263,7 @@ class MaterialManagerDialog(QDialog):
         为什么要有这个：遇到说不清的问题时（贴图不对、类型识别错了、组合结果奇怪），
         让用户能一步回到干净状态重来，比让他去翻 resources/ 和 cache/ 目录可靠得多。
         """
+        total = len(self.library.sources)
         if (
             QMessageBox.question(
                 self,
@@ -270,11 +272,14 @@ class MaterialManagerDialog(QDialog):
                 "  · 已导入的全部素材（%d 个）\n"
                 "  · 组合缓存\n\n"
                 "原始 zip / rar / jar 不会被删，之后可以重新导入。\n\n确定吗？"
-                % len(self.library.sources),
+                % total,
             )
             != QMessageBox.StandardButton.Yes
         ):
             return
+        # 清空是个大动作，必须留痕：不然"我的素材怎么没了"会变成一桩无头案
+        # （用户就是这么撞上的：清空成功、日志里却一个字都没有）。
+        logger().info("清空素材库：原有素材 %d 个，将删除解压结果与全部组合缓存", total)
         # 解压出来的素材、组合结果、图标缩略图、以及解压过程中的中间目录
         for target in (
             self._app_dir / "resources" / "sources",
@@ -287,6 +292,7 @@ class MaterialManagerDialog(QDialog):
         self.library.save(self._app_dir)
         self._refresh()
         self.status.setText("已清空。原始压缩包还在，可以重新导入。")
+        logger().info("清空完成：素材库与缓存已重置（原始压缩包未动）")
 
     # ---- 结束 ------------------------------------------------------------
 

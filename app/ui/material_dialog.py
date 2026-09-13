@@ -50,7 +50,7 @@ class MaterialChoiceDialog(QDialog):
         colors = colors_for(self.palette())
 
         if configured:
-            label = QLabel("已配置的素材包：\n%s" % configured)
+            label = QLabel("上次使用：\n%s" % configured)
             label.setWordWrap(True)
             label.setStyleSheet("color:%s;" % colors.muted.name())
             layout.addWidget(label)
@@ -64,10 +64,10 @@ class MaterialChoiceDialog(QDialog):
 
         buttons = QDialogButtonBox()
         if configured:
-            use_saved = buttons.addButton(
-                "用已配置的素材包", QDialogButtonBox.ButtonRole.AcceptRole
+            use_last = buttons.addButton(
+                "继续使用上次", QDialogButtonBox.ButtonRole.AcceptRole
             )
-            use_saved.clicked.connect(lambda: self._pick("configured"))
+            use_last.clicked.connect(lambda: self._pick("last"))
         pick = buttons.addButton(
             "打开材质管理…", QDialogButtonBox.ButtonRole.AcceptRole
         )
