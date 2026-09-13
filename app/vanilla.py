@@ -31,14 +31,20 @@ def detect_kind(root: Path) -> str:
 
     目前只有 `vanilla` 这条路是打通了的（从客户端 jar 直接生成素材包）；
     资源包与模组都要先有原版底子再合并，属于下一步。
+
+    顺序与 app.library.detect_kind_from_dir 一致：先认自带命名空间（模组），
+    再认 pack.mcmeta（资源包）——反过来的话模组会被误判成资源包。
     """
-    if (root / "assets" / "minecraft" / "blockstates").is_dir():
+    assets = root / "assets"
+    minecraft = assets / "minecraft"
+    if (minecraft / "blockstates").is_dir() and (minecraft / "models").is_dir():
         return "vanilla"
+    if assets.is_dir() and any(
+        p.is_dir() and p.name != "minecraft" for p in assets.iterdir()
+    ):
+        return "mod"
     if (root / "pack.mcmeta").is_file():
         return "resourcepack"
-    assets = root / "assets"
-    if any(p.is_dir() for p in assets.glob("*")) if assets.is_dir() else False:
-        return "mod"
     return "unknown"
 
 
