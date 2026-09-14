@@ -568,4 +568,7 @@ STRINGS = {
     '查询失败': 'Lookup failed',
     '没能从服务器拿到这条反馈的状态：%s': "Could not fetch this report's status: %s",
     '本机那份记录不在了：\n%s': 'The local copy is gone:\n%s',
+
+    # ---- 回复标记 ----
+    'AI 翻译': 'AI-translated',
 }

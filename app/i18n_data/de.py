@@ -551,4 +551,7 @@ STRINGS = {
     '查询失败': 'Abfrage fehlgeschlagen',
     '没能从服务器拿到这条反馈的状态：%s': 'Status dieser Meldung nicht abrufbar: %s',
     '本机那份记录不在了：\n%s': 'Die lokale Kopie fehlt:\n%s',
+
+    # ---- 回复标记 ----
+    'AI 翻译': 'KI-Übersetzung',
 }

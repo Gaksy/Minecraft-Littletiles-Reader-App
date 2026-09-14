@@ -181,7 +181,12 @@ class MyFeedbackDialog(QDialog):
             text, origin = reply_for(entry, field_name)
             if not text and not origin:
                 continue
-            lines.append("—— %s ——" % i18n.tr(title))
+            # 显示的是译文时标一下"AI 翻译"：用户知道这是机器翻的，不会是站长写的原话
+            shown_is_translation = bool(origin) and not show_origin
+            lines.append(
+                "—— %s%s ——"
+                % (i18n.tr(title), ("（%s）" % i18n.tr("AI 翻译")) if shown_is_translation else "")
+            )
             if origin and show_origin:
                 lines.append(origin)
             else:

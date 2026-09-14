@@ -551,4 +551,7 @@ STRINGS = {
     '查询失败': 'Échec de la consultation',
     '没能从服务器拿到这条反馈的状态：%s': "Impossible d'obtenir l'état : %s",
     '本机那份记录不在了：\n%s': 'La copie locale a disparu :\n%s',
+
+    # ---- 回复标记 ----
+    'AI 翻译': 'Traduit par IA',
 }
