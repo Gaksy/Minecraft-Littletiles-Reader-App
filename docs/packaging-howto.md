@@ -178,26 +178,43 @@ python tools\build_msi.py dist\app\LittleTilesReader-0.1.0-windows-x64 --check
 
 ### Windows 的安装包（MSI）
 
-`tools/build_msi.py` 用 **Python 自带的 `msilib`** 直接建 MSI（不再依赖 WiX）：
-一次跑完"建表 → 把文件塞进 cab → 写快捷方式 → 设升级码"，然后可选地跑解包自检。
+`tools/build_msi.py` 用 **WiX**（免费版 v4）生成 MSI：`packaging/windows/app.wxs` 是
+界面与快捷方式，脚本负责"填文件清单 + 传变量 + 出包 + 自检"。
 
-形态与几个决定：
+一次性准备（每个打包机装一次）：
 
-* **每机器安装**（`ALLUSERS=1`）→ 装到 `C:\Program Files\LittleTilesReader`，
-  双击会有一次 UAC；"应用和功能"里能看到、能卸载。这是 MSI 的常规形态。
+```powershell
+dotnet tool install --global wix --version "4.*"      # 装 WiX 4（免费）
+wix extension add -g WixToolset.UI.wixext/4.0.6       # 界面对话框集
+```
+
+> **别装 WiX 7**：v7 要求接受「Open Source Maintenance Fee」EULA（涉及付费/法务），
+> 那个决定得由人来做；本项目的脚本按 v4 写的。
+
+安装体验（都是 WiX 标准对话框，只插了我们自己的一页）：
+
+```
+欢迎 → 选择语言 → 许可协议（勾选同意才能继续）→ 选择安装位置（可浏览）
+     → 进度 → 完成
+```
+
+* **每机器安装**：装到 `C:\Program Files\LittleTilesReader`，双击弹一次 UAC；
+  用户可以在向导里改目录。"应用和功能"里能看到、能卸载；
+* **开始菜单里有一个「卸载 LittleTiles Reader」**（直接调 `msiexec /x`），
+  另一个快捷方式是应用本身；桌面也放一个；
 * 装到 Program Files 正好落在应用**已经照顾过**的情形：安装目录不可写时
   `app/config.py:data_dir()` 会把 config/logs/outputs/素材 放到
-  `%LOCALAPPDATA%\LittleTilesReader`，并在首次启动提示一句。
-* 开始菜单多一个「LittleTiles Reader」文件夹（内含快捷方式），桌面也放一个。
-* **固定 UpgradeCode + 每版本一个 ProductCode**：以后发新版时，装新版会先卸掉旧版
-  （`RemoveExistingProducts` 排在 `InstallValidate` 与 `InstallInitialize` 之间）。
-* 图标进 `Icon` 表供"应用和功能"显示（`packaging/app.ico`）。
+  `%LOCALAPPDATA%\LittleTilesReader`，并在首次启动提示一句；
+* **语言选择**写进 `HKCU\Software\Gaksy\LittleTilesReader\Language`，
+  应用**第一次启动**（还没有 `config/app.json`）时读它作为默认界面语言；
+  之后以应用内的设置为准（不会每次被安装时的选择覆盖）；
+* **固定 UpgradeCode**：发新版时自动卸旧版（WiX `MajorUpgrade`）。
 
 自检（不需要管理员权限，也不写注册表）：
 
 ```powershell
 python tools\build_msi.py dist\app\LittleTilesReader-<版本>-windows-x64 --check
-# 期望：[OK] 解包自检：244 个文件全部就位、大小一致
+# 期望：[OK] 解包自检：241 个文件全部就位、大小一致
 ```
 
 它跑的是 `msiexec /a`（管理员安装 = 只解包）：能验证表结构合法、cab 可读、
@@ -205,12 +222,13 @@ python tools\build_msi.py dist\app\LittleTilesReader-<版本>-windows-x64 --chec
 
 > **需要管理员权限的那一步（真正装一遍）我这边跑不了**：沙箱里的进程是过滤令牌
 > （管理员组是 deny-only、完整性 Medium），`msiexec /i` 会返回 1925。
-> 所以"双击 → UAC → 装完打开 → 卸载"这一串请在有管理员权限的终端里自己走一遍。
-> 卸载：`msiexec /x dist\app\LittleTilesReader-<版本>-windows-x64.msi /qn`
+> 所以"双击 → UAC → 走完向导 → 打开 → 卸载"这一串请在有管理员权限的终端里自己走一遍。
+> 卸载：开始菜单里的「卸载 LittleTiles Reader」，或
+> `msiexec /x dist\app\LittleTilesReader-<版本>-windows-x64.msi /qn`，
 > 或直接在"应用和功能"里点卸载。
 
-⚠️ `msilib` 在 **Python 3.13 被移除**。本仓库的构建环境是 3.11；换解释器时要
-用 3.12 及以下打包，或把这一层换成 WiX（产物形态不变）。
+⚠️ MSI 的字符串用 **UTF-8 码页（`Codepage="65001"`）**：界面里有中文/日文/韩文，
+用默认的 1252 会在构建时报 `WIX0311`。
 
 ### 为什么会有"显式收集运行时模块"这一步
 

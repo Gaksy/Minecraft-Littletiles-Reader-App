@@ -128,7 +128,8 @@ class AppConfig:
     def load(path: Path | None = None) -> "AppConfig":
         target = path or config_path()
         if not target.is_file():
-            return AppConfig()
+            # 全新安装：语言先看安装程序写下的选择（Windows 安装向导里那一步）
+            return AppConfig(language=_installer_language())
         try:
             data = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -138,6 +139,7 @@ class AppConfig:
             return AppConfig()
         known = set(AppConfig.__dataclass_fields__)
         return AppConfig(**{k: v for k, v in data.items() if k in known})
+
 
     def save(self, path: Path | None = None) -> Path:
         target = path or config_path()
@@ -192,3 +194,27 @@ def _bump(items: list[str], value: str) -> list[str]:
     """把 value 提到最前，去重，并截断到 MAX_RECENT。"""
     rest = [item for item in items if item != value]
     return [value] + rest[: MAX_RECENT - 1]
+
+
+#: Windows 安装向导把"选的语言"写在这个键下（见 packaging/windows/app.wxs）。
+#: 只在**第一次启动**（还没有 config/app.json）时读它，之后以应用自己的设置为准，
+#: 这样用户在应用里改过语言就不会每次被安装时的选择覆盖。
+_INSTALLER_REGISTRY = (r"Software\Gaksy\LittleTilesReader", "Language")
+
+
+def _installer_language() -> str:
+    """安装时选的语言（没装过 / 选的"跟随系统" → 空字符串）。"""
+
+    if not sys.platform.startswith("win"):
+        return ""
+    try:
+        import winreg  # noqa: PLC0415 (只在 Windows 上需要)
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _INSTALLER_REGISTRY[0]) as key:
+            value, _ = winreg.QueryValueEx(key, _INSTALLER_REGISTRY[1])
+    except (ImportError, OSError):
+        return ""
+    code = str(value or "").strip()
+    if not code or code == "follow":
+        return ""
+    return code

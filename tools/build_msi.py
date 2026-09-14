@@ -1,24 +1,24 @@
-"""把打包目录做成一个 Windows 安装包（MSI）。
+"""把打包目录做成一个 Windows 安装包（MSI，走 WiX）。
 
 为什么是 MSI 而不是"再发一个 zip"：用户双击就装、在"应用和功能"里能看到、
 能干净卸载；公司/学校机器上 MSI 也通常比 exe 安装器更容易被允许。
 
-为什么不用 WiX：WiX 要单独装工具链（`dotnet tool install --global wix`），而
-**Python 自带的 `msilib`** 就能建出合法的 MSI——本来 `distutils` 的 `bdist_msi`
-也是这么干的。少一个构建依赖，谁克隆下来都能出包。
+为什么用 WiX（`dotnet tool install --global wix`，一次性）：
 
-⚠️ `msilib` 在 **Python 3.13 被移除**了。本仓库的构建环境是 3.11；将来换解释器时，
-要么用 3.12 及以下打包，要么改走 WiX（那时把这一层换掉即可，产物形态不变）。
+最初这里是用 Python 自带的 `msilib` 直接往 MSI 表里写行的（distutils 的 `bdist_msi`
+就是这么干的）。结果是**装完没有快捷方式、双击没有任何界面、没有卸载入口**——
+表结构错一处就是这种症状，而这种错误在**没有管理员权限的机器上没法先试**。
+WiX 在构建时就把表校验掉，而且自带"欢迎 → 许可协议 → 选安装目录 → 进度 → 完成"
+这套久经考验的对话框（`WixUI_InstallDir`），我们只在它前面插一页语言选择。
 
 安装形态（几个刻意的决定）：
 
-* **按用户安装**（`ALLUSERS=2` + `MSIINSTALLPERUSER=1`）：装到
-  `%LOCALAPPDATA%\\Programs\\LittleTilesReader`，**不弹 UAC、不要管理员**；
-* 装在那儿正好可写，于是应用自己的"数据目录 = 应用所在文件夹"（便携模式）成立，
-  config/logs/outputs 就在安装目录里（`docs/packaging.md` §2.1）；
-* 开始菜单 + 桌面各一个快捷方式；
-* **固定 UpgradeCode + 每版本一个 ProductCode**：以后发新版时，装新版会自动
-  卸掉旧版（大版本升级），而不是在"应用和功能"里堆两个。
+* **每机器安装**（`Scope="perMachine"`）：装到 `C:\Program Files\LittleTilesReader`，
+  双击会弹一次 UAC（MSI 的常规形态）；用户可以在向导里改安装位置；
+* 装到 Program Files 正好落在应用已经照顾过的情形：安装目录不可写时
+  `app/config.py` 会把数据放 `%LOCALAPPDATA%\\LittleTilesReader`；
+* 开始菜单（含**卸载**快捷方式）+ 桌面各一个快捷方式；
+* **固定 UpgradeCode**：发新版时自动卸旧版（`MajorUpgrade`）。
 
 自检（见 `tools/check_msi.py`）：管理员安装（`msiexec /a`）能解出全部文件、
 真机按用户安装 → 能跑 `--self-check` → 卸载后目录与注册项都清掉。
@@ -46,90 +46,97 @@ APP_EXE_RELATIVE = Path("LittleTilesReader") / "LittleTilesReader.exe"
 INSTALL_DIR_NAME = "LittleTilesReader"
 
 
-def _clean(text: str) -> str:
-    return "".join(ch for ch in text.upper() if ch.isalnum() or ch == "_")
+def stable_guid(name: str) -> str:
+    """组件 GUID：按名字派生，**同一个名字永远是同一个 GUID**（升级才能正确换文件）。"""
+
+    return "{%s}" % uuid.uuid5(uuid.NAMESPACE_URL, "%s/%s" % (_SEED, name))
 
 
-def short_dir_name(name: str, taken: set) -> str:
-    """目录的 8.3 短名（MSI 的 DefaultDir 要求 `短名|长名`）。"""
+def wix_executable() -> Path:
+    """找 wix.exe（dotnet 全局工具装到 ~/.dotnet/tools）。"""
 
-    cleaned = _clean(name) or "D"
-    if cleaned[0].isdigit():
-        cleaned = "D" + cleaned
-    base = cleaned[:8]
-    candidate = base
-    index = 1
-    while candidate.upper() in taken:
-        suffix = "~%d" % index
-        candidate = cleaned[: max(1, 8 - len(suffix))] + suffix
-        index += 1
-    taken.add(candidate.upper())
-    return candidate
-
-
-def short_file_name(name: str, taken: set) -> str:
-    """文件的 8.3 短名：`名字~n.扩展名`（扩展名最多留 3 位）。"""
-
-    stem, dot, extension = name.rpartition(".")
-    if not dot:
-        stem, extension = name, ""
-    stem = _clean(stem) or "F"
-    extension = _clean(extension)[:3]
-    room = 8 - (len(extension) + 1 if extension else 0)
-    base = stem[: max(1, room)]
-    candidate = base + (("." + extension) if extension else "")
-    index = 1
-    while candidate.upper() in taken:
-        suffix = "~%d" % index
-        base = stem[: max(1, room - len(suffix))] + suffix
-        candidate = base + (("." + extension) if extension else "")
-        index += 1
-    taken.add(candidate.upper())
-    return candidate
+    candidates = [
+        Path.home() / ".dotnet" / "tools" / "wix.exe",
+        Path(r"C:\Program Files\dotnet\tools\wix.exe"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    found = shutil.which("wix")
+    if found:
+        return Path(found)
+    raise SystemExit(
+        "找不到 WiX。装一次即可：\n"
+        "  dotnet tool install --global wix\n"
+        "（之后 tools/build_msi.py 会自动找到它）"
+    )
 
 
-def dir_default(name: str, taken: set | None = None) -> str:
-    """DefaultDir 的写法：不是合法 8.3 名字时用 `短名|长名`。
+def _xml_escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
-    只写长名在多数机器上也能装上，但那是"安装器自己编短名"，属于运气；
-    显式给出两个名字才是规矩里写清楚的写法（ICE 也不会报警告）。
+
+def _component_id(relative: str) -> str:
+    return "c_%s" % hashlib.sha1(relative.encode("utf-8")).hexdigest()[:16]
+
+
+def _directory_id(relative: str) -> str:
+    return "d_%s" % hashlib.sha1(relative.encode("utf-8")).hexdigest()[:16]
+
+
+def render_payload(package_dir: Path) -> tuple[str, list[str]]:
+    """把打包目录渲染成 WiX 的 `<Directory>` / `<Component>` 片段。
+
+    * 组件 Id 与 GUID 都由**相对路径**派生：同一个文件永远是同一个 GUID，
+      发新版时 MSI 才会"就地换文件"而不是又装一份；
+    * 一个文件一个组件：KeyPath 天然就是这个文件，不用再操心哪个文件当关键路径。
     """
 
-    taken = taken if taken is not None else set()
-    # 8.3 兼容（≤8 个字符、没有空格/特殊字符）时，长短名本来就是同一个
-    if len(name) <= 8 and all(ch.isalnum() or ch in "_-" for ch in name):
-        taken.add(name.upper())
-        return name
-    return "%s|%s" % (short_dir_name(name, taken), name)
+    tree: dict = {}
+    for item in sorted(Path(package_dir).rglob("*")):
+        if item.is_file():
+            parts = item.relative_to(package_dir).parts
+            node = tree
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node.setdefault("__files__", []).append("\\".join(parts))
 
+    components: list[str] = []
 
-def file_default(name: str, taken: set) -> str:
-    """File 表的 FileName 列：8.3 兼容就直接写，否则 `短名|长名`。"""
+    def render(node: dict, prefix: str, indent: str) -> str:
+        lines: list[str] = []
+        for name in sorted(k for k in node if k != "__files__"):
+            relative = "%s/%s" % (prefix, name) if prefix else name
+            child = node[name]
+            lines.append(
+                '%s<Directory Id="%s" Name="%s">' % (indent, _directory_id(relative), _xml_escape(name))
+            )
+            lines.append(render(child, relative, indent + "  "))
+            lines.append("%s</Directory>" % indent)
+        for relative in node.get("__files__", []):
+            component = _component_id(relative)
+            components.append(component)
+            lines.append(
+                '%s<Component Id="%s" Guid="%s">' % (indent, component, stable_guid(relative))
+            )
+            lines.append(
+                '%s  <File Id="f_%s" Source="%s" KeyPath="yes" />'
+                % (indent, component[2:], _xml_escape(str(Path(package_dir) / relative)))
+            )
+            lines.append("%s</Component>" % indent)
+        return "\n".join(lines)
 
-    stem, dot, extension = name.rpartition(".")
-    short_ok = (
-        len(name) <= 12
-        and len(stem) <= 8
-        and (not dot or len(extension) <= 3)
-        and all(ch.isalnum() or ch in "_-$" for ch in name)
-    )
-    if short_ok:
-        taken.add(name.upper())
-        return name
-    return "%s|%s" % (short_file_name(name, taken), name)
-
-
-def product_code(version: str) -> str:
-    """每个版本一个 ProductCode：升级时靠 UpgradeCode 认出旧版并卸掉它。"""
-
-    return "{%s}" % uuid.uuid5(uuid.NAMESPACE_URL, "%s/%s" % (_SEED, version))
+    return render(tree, "", "        "), components
 
 
 def msi_version(version: str) -> str:
     """MSI 的 ProductVersion 只能是 `主.次.修订`（最多三段数字，不能带后缀）。
 
     应用版本带 `-beta` 这类后缀时，取数字前缀（`0.1.0-beta` → `0.1.0`）；
-    后缀本身照旧出现在包名与 README 里。
+    后缀本身照旧出现在包名与自述文本里。
     """
 
     numbers = []
@@ -141,210 +148,77 @@ def msi_version(version: str) -> str:
     return ".".join(numbers[:3])
 
 
-def _require_msilib():
-    try:
-        import msilib  # noqa: PLC0415 (只在需要时导入：非 Windows 上没有)
-        import msilib.schema  # noqa: PLC0415,F401 (表结构：schema 表 + sequence 序列)
-        import msilib.sequence  # noqa: PLC0415,F401
-    except ImportError:      # pragma: no cover - 取决于解释器版本
-        raise SystemExit(
-            "这台 Python 里没有 msilib（Python 3.13 起被移除）。\n"
-            "用 Python 3.11/3.12 打包，或改用 WiX 生成 MSI。"
-        )
-    return msilib
-
-
-class _TreeBuilder:
-    """把打包目录登记进 MSI 的 Directory / Component / File 表，并把文件塞进 cabinet。
-
-    为什么不用 `msilib.Directory`：那个类把"安装到哪"和"从哪读文件"绑成一件事
-    （`绝对路径 = 父目录的绝对路径 + physical`），于是源目录必须长得跟安装目录一样。
-    我们的包是"一个平铺目录"，装到 `%LOCALAPPDATA%\\Programs\\…` 下，两者对不上——
-    照那样写会把源路径算成 `<包目录>\\Programs\\LittleTilesReader\\…`（不存在）。
-    所以这里只手写表行：目录是纯元数据，文件走 `CAB.append()`。
-    """
-
-    #: msidbComponentAttributes64bit：64 位 MSI 的组件要带这一位
-    COMPONENT_64BIT = 256
-    #: msidbFileAttributesVital：装不上就算失败，而不是跳过
-    FILE_VITAL = 512
-
-    def __init__(self, msilib, db, cab, feature_id: str) -> None:
-        self.msilib = msilib
-        self.db = db
-        self.cab = cab
-        self.feature_id = feature_id
-        self._dir_ids = {"TARGETDIR", "LocalAppDataFolder", "ProgramsFolder",
-                         "INSTALLDIR", "ProgramMenuFolder", "LTRStartMenuFolder",
-                         "DesktopFolder"}
-        self._component_ids = set()
-
-    # ---- 唯一命名 --------------------------------------------------------
-
-    def _directory_id(self, base: str) -> str:
-        candidate = self.msilib.make_id(base)
-        index = 1
-        while candidate in self._dir_ids:
-            candidate = "%s_%d" % (self.msilib.make_id(base), index)
-            index += 1
-        self._dir_ids.add(candidate)
-        return candidate
-
-    def _component_id(self, base: str) -> str:
-        candidate = base
-        index = 1
-        while candidate in self._component_ids:
-            candidate = "%s_%d" % (base, index)
-            index += 1
-        self._component_ids.add(candidate)
-        return candidate
-
-    # ---- 递归 ------------------------------------------------------------
-
-    def add(self, folder: Path, directory_id: str) -> str:
-        """把 `folder` 里的文件登记进 `directory_id`，返回这个目录的组件名。"""
-
-        component = self._component_id(self.msilib.make_id(directory_id))
-        self.msilib.add_data(self.db, "Component", [
-            (component, self.msilib.gen_uuid(), directory_id,
-             self.COMPONENT_64BIT, None, None),
-        ])
-        self.msilib.add_data(self.db, "FeatureComponents", [(self.feature_id, component)])
-
-        file_short_names: set = set()
-        for item in sorted(folder.iterdir(), key=lambda p: (p.is_dir(), p.name.lower())):
-            if item.is_file():
-                sequence, logical = self.cab.append(str(item), item.name, None)
-                self.msilib.add_data(self.db, "File", [
-                    (logical, component, file_default(item.name, file_short_names),
-                     item.stat().st_size, None, None, self.FILE_VITAL, sequence),
-                ])
-            elif item.is_dir():
-                sub_id = self._directory_id(item.name)
-                self.msilib.add_data(self.db, "Directory", [
-                    (sub_id, directory_id, dir_default(item.name)),
-                ])
-                self.add(item, sub_id)
-        return component
-
-
 def make_msi(
     package_dir: Path,
     output: Path,
     *,
     version: str,
     icon: Path | None = None,
+    license_rtf: Path | None = None,
     product_name: str = PRODUCT_NAME,
     manufacturer: str = MANUFACTURER,
     quiet: bool = False,
 ) -> Path:
-    """把 `package_dir` 里的东西打成一个按用户安装的 MSI。"""
+    """把 `package_dir` 里的东西打成一个带安装界面的 MSI（WiX）。"""
 
     if sys.platform != "win32":
         raise SystemExit("MSI 只能在 Windows 上生成")
-    msilib = _require_msilib()
 
+    root = Path(__file__).resolve().parents[1]
     package_dir = Path(package_dir).resolve()
     if not (package_dir / APP_EXE_RELATIVE).is_file():
         raise SystemExit(
             "包目录不对：找不到 %s\n（期望的是 PyInstaller onedir + 库 CLI 的目录）"
             % (package_dir / APP_EXE_RELATIVE)
         )
+    wxs = root / "packaging" / "windows" / "app.wxs"
+    if not wxs.is_file():
+        raise SystemExit("缺少 WiX 定义：%s" % wxs)
+    license_rtf = Path(license_rtf or (root / "packaging" / "windows" / "license.rtf"))
+    if not license_rtf.is_file():
+        raise SystemExit("缺少协议页 RTF：%s" % license_rtf)
+    icon = Path(icon or (root / "packaging" / "app.ico"))
+
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         output.unlink()
 
-    numeric = msi_version(version)
-    db = msilib.init_database(
-        str(output), msilib.schema, product_name, product_code(version), numeric,
-        manufacturer,
+    # 生成"填好文件清单"的 .wxs（WiX 4 没有自动收集目录的 <Files>，自己生成更可控）
+    payload_xml, components = render_payload(package_dir)
+    template = wxs.read_text(encoding="utf-8")
+    rendered = template.replace("<!-- @@PAYLOAD@@ -->", payload_xml).replace(
+        "<!-- @@FEATURE_COMPONENTS@@ -->",
+        "\n".join(
+            '      <ComponentRef Id="%s" />' % name for name in components
+        ),
     )
-    # 大版本升级：让 RemoveExistingProducts 排在 InstallValidate(1400) 与
-    # InstallInitialize(1500) 之间 —— 先卸掉旧版，再装新版。它本来就在标准序列里
-    # （只是排在很后面），所以这里改顺序号而不是插一行（插会撞主键）。
-    msilib.change_sequence(
-        msilib.sequence.InstallExecuteSequence, "RemoveExistingProducts", 1450
-    )
-    msilib.add_tables(db, msilib.sequence)
+    build_dir = output.parent / "wix"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    generated = build_dir / "app.generated.wxs"
+    generated.write_text(rendered, encoding="utf-8")
 
-    props = [
-        # **每机器安装**（ALLUSERS=1，装进 Program Files）—— MSI 的常规形态：
-        # 双击会弹一次 UAC，装完在"应用和功能"里能看到、能卸载。
-        #
-        # 为什么不用"按用户安装"（装到 %LOCALAPPDATA%）：实测过三种写法，
-        # 只要这台机器上的用户属于管理员组，Windows Installer 都会选**每机器**
-        # 形态（注册进 HKLM），而按用户目录链把文件放进 %LOCALAPPDATA% ——
-        # 注册形态与文件位置对不上，卸载时会留下孤儿。真正"强制按用户"
-        # （ALLUSERS 空值）在 msilib 里连写进 Property 表都不允许。
-        #
-        # 装到 Program Files 正好落在应用已经照顾过的情形：安装目录不可写时，
-        # `app/config.py:data_dir()` 会把数据放 %LOCALAPPDATA%\LittleTilesReader
-        # 并在首次启动提示一句。不想装、或没有管理员权限的人用便携 zip。
-        ("ALLUSERS", "1"),
-        ("ARPINSTALLLOCATION", "INSTALLDIR"),
-        ("UpgradeCode", UPGRADE_CODE),
-        # "应用和功能"里显示什么、能不能点"修改"
-        ("ARPCOMMENTS", "LittleTiles 存档 / 结构导出工具（OBJ + 贴图）"),
-        ("ARPCONTACT", manufacturer),
-        ("ARPURLINFOABOUT", "https://github.com/Gaksy/Minecraft-Littletiles-Reader-App"),
-        ("ARPNOMODIFY", "1"),
-        ("ARPNOREPAIR", "1"),
-        ("DiskPrompt", product_name),
+    command = [
+        str(wix_executable()),
+        "build",
+        str(generated),
+        "-arch", "x64",
+        "-ext", "WixToolset.UI.wixext",
+        "-o", str(output),
+        "-d", "Version=%s" % msi_version(version),
+        "-d", "UpgradeCode=%s" % UPGRADE_CODE,
+        "-d", "PayloadDir=%s" % package_dir,
+        "-d", "IconFile=%s" % icon,
+        "-d", "LicenseRtf=%s" % license_rtf,
+        "-d", "GuidShortcuts=%s" % stable_guid("start-menu-shortcuts"),
+        "-d", "GuidDesktop=%s" % stable_guid("desktop-shortcut"),
+        "-d", "GuidLanguage=%s" % stable_guid("language-registry"),
     ]
-    if icon is not None and Path(icon).is_file():
-        # 图标直接进 Icon 表（Data 列是流）：ARP（应用和功能）里显示的就是它
-        stream = "LTR_PRODUCT_ICON.ICO"
-        msilib.add_data(db, "Icon", [(stream, msilib.Binary(str(icon)))])
-        props.append(("ARPPRODUCTICON", stream))
-    msilib.add_data(db, "Property", props)
-
-    # 目录树：TARGETDIR → Program Files\LittleTilesReader（= INSTALLDIR）。
-    # 这些只是表里的"安装到哪"，跟源目录无关（源文件由 CAB 直接收）。
-    start_menu_taken: set = set()
-    msilib.add_data(db, "Directory", [
-        ("TARGETDIR", None, "SourceDir"),
-        ("ProgramFiles64Folder", "TARGETDIR", "."),
-        ("INSTALLDIR", "ProgramFiles64Folder", dir_default(INSTALL_DIR_NAME)),
-        ("ProgramMenuFolder", "TARGETDIR", "."),
-        ("LTRStartMenuFolder", "ProgramMenuFolder",
-         dir_default(product_name, start_menu_taken)),
-        ("DesktopFolder", "TARGETDIR", "."),
-    ])
-    # 功能（用户视角的一整块）：默认全部安装
-    msilib.add_data(db, "Feature", [
-        ("DefaultFeature", None, product_name, "应用与本地导出引擎", 1, 1,
-         "INSTALLDIR", 0),
-    ])
-
-    cab = msilib.CAB("LittleTilesReader")
-    install_component = _TreeBuilder(
-        msilib, db, cab, "DefaultFeature"
-    ).add(package_dir, "INSTALLDIR")
-    cab.commit(db)
-
-    # 快捷方式：非广告式（Target 直接写展开后的路径）
-    if install_component:
-        target_exe = "[INSTALLDIR]%s" % str(APP_EXE_RELATIVE)
-        working = "[INSTALLDIR]%s" % APP_EXE_RELATIVE.parent
-        rows = [
-            ("LTRStartMenuShortcut", "LTRStartMenuFolder",
-             "LittleTilesReader|LittleTiles Reader", install_component,
-             target_exe, None, "LittleTiles Reader", None, None, None, 1, working),
-            ("LTRDesktopShortcut", "DesktopFolder",
-             "LittleTilesReader|LittleTiles Reader", install_component,
-             target_exe, None, "LittleTiles Reader", None, None, None, 1, working),
-        ]
-        msilib.add_data(db, "Shortcut", rows)
-
-    # 大版本升级：装新版时先卸掉旧版（UpgradeCode 相同、版本更低者）。
-    # Attributes=1 = VersionMinInclusive；VersionMax 不含（默认）→ 只命中更低的版本。
-    # 动作本身已经在标准序列里了，顺序号在上面用 change_sequence 改过。
-    msilib.add_data(db, "Upgrade", [
-        (UPGRADE_CODE, None, numeric, None, 1, None, "LTR_UPGRADE_DETECTED"),
-    ])
-    db.Commit()
-    db.Close()
+    if not quiet:
+        print("开始构建 MSI：\n  " + " ".join(command))
+    done = subprocess.run(command, text=True, encoding="utf-8", errors="replace")
+    if done.returncode != 0 or not output.is_file():
+        raise SystemExit("wix build 失败（退出码 %d）" % done.returncode)
 
     if not quiet:
         print("安装包（MSI）：%s（%s）" % (output, human(output.stat().st_size)))

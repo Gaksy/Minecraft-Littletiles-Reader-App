@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Windows 安装包（MSI）的 WiX 定义。由 tools/build_msi.py 填好变量后调 `wix build`。
+
+  为什么用 WiX 而不是自己往 MSI 表里写行：界面（欢迎/协议/选目录/进度/完成）与
+  快捷方式、卸载登记这些东西，表结构错一处就是"装不上/装完没有卸载入口"，
+  而且**没法在没有管理员权限的机器上先试**。WiX 在构建时就会校验这些表。
+
+  变量（都由 tools/build_msi.py 传）：
+    Version / UpgradeCode / PayloadDir / IconFile / LicenseRtf
+    GuidShortcuts / GuidDesktop / GuidLanguage
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="LittleTiles Reader"
+           Manufacturer="Gaksy"
+           Version="$(var.Version)"
+           UpgradeCode="$(var.UpgradeCode)"
+           Scope="perMachine"
+           Language="1033"
+           Codepage="65001"
+           InstallerVersion="500"
+           Compressed="yes">
+
+    <SummaryInformation Description="LittleTiles Reader 安装程序"
+                        Manufacturer="Gaksy" />
+    <MajorUpgrade DowngradeErrorMessage="这台机器上已经装有更新版本的 LittleTiles Reader，请先卸载它。" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- 安装界面：欢迎 → 选择语言 → 许可协议 → 选择安装位置 → 进度 → 完成 -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <!-- “应用和功能”里的信息 -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPCOMMENTS" Value="LittleTiles 存档 / 结构导出工具（OBJ + 贴图）" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Gaksy/Minecraft-Littletiles-Reader-App" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Gaksy/Minecraft-Littletiles-Reader-App" />
+
+    <!-- 语言选择（向导里选，写进注册表；应用第一次启动读它作为默认界面语言） -->
+    <Property Id="APP_LANGUAGE" Value="follow" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="LittleTilesReader">
+        <!-- 下面这行会被 tools/build_msi.py 换成打包目录的目录树 + 文件清单
+             （WiX 4 没有 v5 那个 <Files> 自动收集，自己生成更可控） -->
+        <!-- @@PAYLOAD@@ -->
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppProgramMenuFolder" Name="LittleTiles Reader" />
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="Main" Title="LittleTiles Reader" Level="1">
+      <!-- @@FEATURE_COMPONENTS@@ -->
+      <ComponentRef Id="StartMenuShortcuts" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="AppLanguage" />
+    </Feature>
+
+    <Component Id="StartMenuShortcuts" Directory="AppProgramMenuFolder"
+               Guid="$(var.GuidShortcuts)">
+      <Shortcut Id="StartMenuShortcut"
+                Name="LittleTiles Reader"
+                Description="LittleTiles 存档 / 结构导出工具"
+                Target="[INSTALLFOLDER]LittleTilesReader\LittleTilesReader.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AppIcon.ico" />
+      <!-- 卸载入口跟着开始菜单走：不然用户只能去“应用和功能”里翻 -->
+      <Shortcut Id="UninstallShortcut"
+                Name="卸载 LittleTiles Reader"
+                Description="卸载 LittleTiles Reader"
+                Target="[System64Folder]msiexec.exe"
+                Arguments="/x [ProductCode]" />
+      <RemoveFolder Id="RemoveAppProgramMenuFolder" Directory="AppProgramMenuFolder" On="uninstall" />
+      <RegistryValue Root="HKLM" Key="Software\Gaksy\LittleTilesReader"
+                     Name="StartMenuShortcuts" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="DesktopShortcut" Directory="DesktopFolder"
+               Guid="$(var.GuidDesktop)">
+      <Shortcut Id="DesktopShortcutLink"
+                Name="LittleTiles Reader"
+                Description="LittleTiles 存档 / 结构导出工具"
+                Target="[INSTALLFOLDER]LittleTilesReader\LittleTilesReader.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AppIcon.ico" />
+      <RegistryValue Root="HKLM" Key="Software\Gaksy\LittleTilesReader"
+                     Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="AppLanguage" Directory="INSTALLFOLDER" Guid="$(var.GuidLanguage)">
+      <RegistryValue Root="HKCU" Key="Software\Gaksy\LittleTilesReader"
+                     Name="Language" Type="string" Value="[APP_LANGUAGE]" KeyPath="yes" />
+    </Component>
+
+    <!--
+      语言选择页：插在“欢迎”之后、“许可协议”之前。
+      用的是 WixUI_InstallDir 的那套对话框，只把欢迎页的“下一步”改指向本页。
+    -->
+    <UI>
+      <Dialog Id="LanguageDlg" Width="370" Height="270"
+              Title="[ProductName] 安装程序">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}选择语言" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="选择安装程序使用的语言。首次启动应用时也会用它（之后可在应用里改）。" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="373" Height="0" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="373" Height="0" />
+        <Control Id="LanguageLabel" Type="Text" X="25" Y="60" Width="200" Height="15"
+                 Transparent="yes" NoPrefix="yes" Text="语言：" />
+        <Control Id="LanguageRadio" Type="RadioButtonGroup" Property="APP_LANGUAGE"
+                 X="25" Y="78" Width="240" Height="96">
+          <RadioButtonGroup Property="APP_LANGUAGE">
+            <RadioButton Value="follow" Text="跟随系统" X="0" Y="0" Width="240" Height="16" />
+            <RadioButton Value="zh_CN" Text="简体中文" X="0" Y="18" Width="240" Height="16" />
+            <RadioButton Value="en" Text="English" X="0" Y="36" Width="240" Height="16" />
+            <RadioButton Value="ja" Text="日本語" X="0" Y="54" Width="240" Height="16" />
+            <RadioButton Value="ko" Text="한국어" X="0" Y="72" Width="240" Height="16" />
+          </RadioButtonGroup>
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="上一步" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="下一步" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="取消">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Publish Dialog="LanguageDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="LanguageDlg" Control="Next" Event="NewDialog" Value="LicenseAgreementDlg" />
+      <!-- 把欢迎页的“下一步”接到语言页 -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog"
+               Value="LanguageDlg" Order="1" />
+      <!-- 协议页的“上一步”回到语言页 -->
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog"
+               Value="LanguageDlg" Order="1" />
+
+      <!-- 语言页只在首次安装时出现（改/修复安装直接进协议页） -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog"
+               Value="LicenseAgreementDlg" Order="2" Condition="Installed" />
+    </UI>
+  </Package>
+</Wix>
