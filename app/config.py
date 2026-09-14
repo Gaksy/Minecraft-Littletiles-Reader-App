@@ -34,6 +34,11 @@ class AppConfig:
     shown_chunk_help: bool = False                      # 区块选择说明是否已经自动弹过一次
     ui_theme: str = "dark"                              # 界面主题：dark（默认，同网站）/ light
     language: str = ""                                  # 界面语言：空 = 跟随系统；否则是 i18n 的语言代码
+    # ---- 与服务器（inception-work）的联动 ----
+    server_base: str = ""            # 空 = 用 app.api.DEFAULT_BASE（https://www.inception.work/api）
+    report_contact: str = ""         # 上次填过的联系方式，下次反馈自动带出来
+    check_update_on_start: bool = True   # 启动时静默查一次（每天最多一次）
+    last_update_check: str = ""      # 上次检查日期（YYYY-MM-DD），用来做"每天一次"
 
     @staticmethod
     def load(path: Path | None = None) -> "AppConfig":

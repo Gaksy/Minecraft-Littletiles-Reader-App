@@ -141,9 +141,12 @@ def render_dialogs(theme_name: str, output_dir: Path) -> None:
     application = QApplication.instance() or QApplication([])
     design.install(application, theme_name)
     from app.ui.delete_project import DeleteProjectDialog
+    from app.ui.report_dialog import ReportDialog
     from app.ui.project_window import _ProjectConfigDialog
     from app.ui.project_wizard import NewProjectWizard
     from app.ui.reset_dialog import ResetDataDialog
+    from app.ui.update_dialog import UpdateDialog
+    from app.update import UpdateInfo
 
     with tempfile.TemporaryDirectory(prefix="lt-theme-dlg-") as tmp:
         root = Path(tmp)
@@ -155,6 +158,23 @@ def render_dialogs(theme_name: str, output_dir: Path) -> None:
             (DeleteProjectDialog(str(project.path), project), "delete"),
             (ResetDataDialog(root), "reset"),
             (NewProjectWizard(AppConfig(), project.path), "wizard"),
+            (
+                ReportDialog(
+                    AppConfig(), root, None,
+                    client=__import__("app.api", fromlist=["ApiClient"]).ApiClient(
+                        opener=lambda _request: b'{"success":true,"payload":{}}'
+                    ),
+                ),
+                "report",
+            ),
+            (
+                UpdateDialog(
+                    UpdateInfo(current="0.1.0", latest="v0.9.0", has_update=True,
+                               platform="macos-arm", url="https://example.invalid/a.zip",
+                               note="12 MB")
+                ),
+                "update",
+            ),
         ):
             dialog.resize(760, 520)
             dialog.show()
@@ -184,7 +204,9 @@ def main() -> int:
                  "config_light", "config_dark",
                  "delete_light", "delete_dark",
                  "reset_light", "reset_dark",
-                 "wizard_light", "wizard_dark"):
+                 "wizard_light", "wizard_dark",
+                 "report_light", "report_dark",
+                 "update_light", "update_dark"):
         print("  %s: %s" % (name, out_dir / (name + ".png")))
     return 0
 

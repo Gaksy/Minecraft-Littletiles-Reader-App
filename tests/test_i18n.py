@@ -45,6 +45,9 @@ from app.records import ExportRecord, RecordStore  # noqa: E402
 from app.ui.delete_project import DeleteProjectDialog  # noqa: E402
 from app.ui.project_wizard import NewProjectWizard  # noqa: E402
 from app.ui.reset_dialog import ResetDataDialog  # noqa: E402
+from app.ui.report_dialog import ReportDialog  # noqa: E402
+from app.ui.update_dialog import UpdateDialog  # noqa: E402
+from app.update import UpdateInfo  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -61,6 +64,14 @@ def check(name: str, condition: bool, detail: str = "") -> None:
                          "  " + detail if detail else ""))
     if not condition:
         FAILURES.append(name)
+
+
+def _offline_client():
+    """不联网的客户端：i18n 自检只关心界面文案。"""
+
+    from app.api import ApiClient
+
+    return ApiClient(opener=lambda _request: b'{"success": true, "payload": {}}')
 
 
 def visible_texts(widget) -> list[str]:
@@ -165,6 +176,12 @@ def main() -> int:
             "清空数据": lambda: ResetDataDialog(root),
             "新建向导": lambda: NewProjectWizard(config, root / "np"),
             "删除项目": lambda: DeleteProjectDialog(str(project.path), project),
+            "反馈问题": lambda: ReportDialog(config, root, None, client=_offline_client()),
+            "检查更新": lambda: UpdateDialog(
+                UpdateInfo(current="0.1.0", latest="v0.9.0", has_update=True,
+                           platform="macos-arm", url="https://example.invalid/a.zip",
+                           note="12 MB")
+            ),
         }
         for label, factory in cases.items():
             try:

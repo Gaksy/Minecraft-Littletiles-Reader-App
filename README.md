@@ -29,6 +29,9 @@ python -m app            # 启动界面
   2px 描边、石头底 + 草绿），深浅色主题，7 种界面语言
   （简体中文 / 繁體中文 / English / 日本語 / 한국어 / Deutsch / Français）
 - **库版本**：启动时直接问 `LittleTilesReader --version`，不必先导出一次
+- **检查更新 / 反馈问题**：菜单「帮助」里有；更新查的是网站公开的发布接口，
+  反馈走网站已有的匿名反馈接口（自动附诊断与日志尾部，已脱敏）。
+  细节与"还需要服务端配合什么"见 [`docs/update-and-feedback.md`](docs/update-and-feedback.md)
 
 ## 两个仓库的分工
 
@@ -172,6 +175,7 @@ python/                   MATLAB 辅助
 docs/
 ├── design.md              应用的需求与设计（含多语言与界面约定）
 ├── design-system.md       界面设计系统（令牌 / 组件 / 文案规范）
+├── update-and-feedback.md 检查更新与反馈上报（结合服务器现状的评估）
 └── job.md                 与库的 job 契约（应用侧）
 ```
 

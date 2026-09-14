@@ -1997,8 +1997,7 @@ class ProjectWindow(QMainWindow):
         self._refresh_history()
         self._refresh_storage()
 
-    def _search_chunks(self, x: int | None = None, z: int | None = None,
-                       dimension: str | None = None) -> None:
+    def _search_chunks(self, x=None, z=None, dimension=None, *_args) -> None:
         """按坐标搜记录；从导出概览点进来时带上那个坐标。"""
 
         initial = None if x is None or z is None else (int(x), int(z), dimension or "")

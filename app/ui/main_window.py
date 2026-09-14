@@ -15,7 +15,7 @@ from datetime import datetime
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QEventLoop, QThread, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QEventLoop, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -184,6 +184,9 @@ class MainWindow(QMainWindow):
         logger().info("库 CLI: %s（存在=%s）", cli, Path(cli).is_file())
         logger().info("默认素材包: %s", self.config.default_assets or "（未设置）")
         logger().info("默认输出目录: %s", self.config.resolved_output_dir())
+        # 启动后查一次更新：每天最多一次，失败静默（离线也要能正常用）。
+        # 放到事件循环里跑，别让网络请求卡住窗口显示。
+        QTimer.singleShot(0, self._maybe_check_update_on_start)
 
     # ---- 兼容层 ----------------------------------------------------------
 
@@ -386,6 +389,9 @@ class MainWindow(QMainWindow):
         app_menu.addAction("清空所有数据", self._reset_app_data)
 
         help_menu = bar.addMenu("帮助(&H)")
+        help_menu.addAction("检查更新", self._check_update)
+        help_menu.addAction("反馈问题", self._report_problem)
+        help_menu.addSeparator()
         help_menu.addAction("关于", self._show_about)
         i18n.translate(self)
 
@@ -450,6 +456,73 @@ class MainWindow(QMainWindow):
 
     def _show_help(self) -> None:
         IllustrationDialog(self).exec()
+
+    # ---- 检查更新 / 反馈问题 ---------------------------------------------
+
+    def _api_client(self):
+        from ..api import ApiClient
+
+        return ApiClient(self.config.server_base or None)
+
+    def _check_update(self, *_args, silent: bool = False) -> None:
+        """查一次更新。`silent=True`（启动时那次）出错不打扰用户。"""
+
+        from ..api import ApiError
+        from ..update import check
+        from .update_dialog import UpdateDialog
+
+        try:
+            info = check(self._api_client())
+        except ApiError as error:
+            logger().info("检查更新失败（%s）：%s", error.kind, error)
+            if not silent:
+                popup.warning(
+                    self,
+                    i18n.tr("检查更新"),
+                    i18n.tr("连不上服务器：%s\n\n可以稍后再试；检查更新的接口是公开的。")
+                    % error,
+                )
+            return
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        self.config.last_update_check = today
+        self._save_config("检查更新时间")
+        if info.has_update:
+            self.panel.log_line(
+                "发现新版本：%s（当前 %s）%s"
+                % (info.latest, info.current, ("　" + info.url) if info.url else "")
+            )
+            UpdateDialog(info, self).exec()
+        elif not silent:
+            UpdateDialog(info, self).exec()
+
+    def _maybe_check_update_on_start(self) -> None:
+        """启动时最多每天查一次；失败静默（离线也要能正常用）。"""
+
+        if not self.config.check_update_on_start:
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.config.last_update_check == today:
+            return
+        self._check_update(silent=True)
+
+    def _report_problem(self) -> None:
+        from .report_dialog import ReportDialog
+
+        dialog = ReportDialog(
+            self.config,
+            APP_DIR,
+            self,
+            client=self._api_client(),
+            extra={
+                "library": self._library_version or "?",
+                "theme": design.manager().name,
+                "language": i18n.current(),
+                "cli": str(self._cli_path()),
+            },
+        )
+        dialog.exec()
+        self._save_config("联系方式")
 
     # ---- 清空所有数据 ----------------------------------------------------
 
