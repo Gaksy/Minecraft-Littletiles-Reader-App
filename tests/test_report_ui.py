@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
 from app.api import ApiClient  # noqa: E402
 from app.config import AppConfig  # noqa: E402
 from app.report import ReportStore  # noqa: E402
+from app import i18n  # noqa: E402
 from app.ui import design  # noqa: E402
 from app.ui.report_dialog import ReportDialog  # noqa: E402
 from app.ui.update_dialog import UpdateDialog  # noqa: E402
@@ -87,6 +88,21 @@ def main() -> int:
         )
         dialog.show()
         application.processEvents()
+        check("有惯用语言下拉（与网站一致）", dialog.locale_box.count() == 7,
+              str(dialog.locale_box.count()))
+        check("默认跟当前界面语言",
+              dialog.locale_box.currentData() == i18n.current(),
+              str(dialog.locale_box.currentData()))
+        dialog.locale_box.setCurrentIndex(dialog.locale_box.findData("zh-Hant"))
+        application.processEvents()
+        check("非中文时说明会附译文", "AI 翻译" in dialog.locale_hint.text(),
+              dialog.locale_hint.text())
+        dialog.locale_box.setCurrentIndex(dialog.locale_box.findData("zh-Hans"))
+        application.processEvents()
+        check("简体中文时说明不用翻译", "不需要翻译" in dialog.locale_hint.text(),
+              dialog.locale_hint.text())
+        dialog.locale_box.setCurrentIndex(dialog.locale_box.findData("zh-Hant"))
+
         check("预览里已经有诊断（默认勾选附带）",
               "app=" in dialog.preview.toPlainText()
               and "0.2.0-beta" in dialog.preview.toPlainText(),
@@ -113,6 +129,8 @@ def main() -> int:
         dialog._send()
         application.processEvents()
         text = dialog.result.text()
+        check("提交时带上选中的惯用语言",
+              client.payload.get("locale") == "zh-Hant", str(client.payload.get("locale")))
         check("提交时带上了 wantAttachment 标记",
               client.payload.get("wantAttachment") is True, str(client.payload.get("wantAttachment")))
         check("发送成功后显示编号与数据码",

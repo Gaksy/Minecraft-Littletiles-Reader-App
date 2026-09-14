@@ -518,6 +518,14 @@ def test_window(tmp: Path) -> None:
     check("存档备份打进 zip 了", len(project.backups()) == 1 and project.backups()[0].is_file())
     check("没有素材时提示白模", "白模" in window.package_status.text(),
           window.package_status.text())
+    menus = [action.text() for action in window.menuBar().actions()]
+    check("项目界面也有「视图」菜单（语言/主题）",
+          any("视图" in text for text in menus), str(menus))
+    view_menu = next((a.menu() for a in window.menuBar().actions() if "视图" in a.text()), None)
+    check("视图菜单里有「语言」",
+          view_menu is not None
+          and any("语言" in a.text() for a in view_menu.actions()),
+          str([a.text() for a in view_menu.actions()]) if view_menu else "?")
     check("内容没有溢出（不出现整页横向滚动）",
           window.minimumSizeHint().width() < 900, str(window.minimumSizeHint().width()))
     check("没有素材时不给「重新组合」", window.btn_recompose.isEnabled() is False)

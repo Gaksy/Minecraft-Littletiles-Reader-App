@@ -1184,6 +1184,16 @@ class ProjectWindow(QMainWindow):
         project_menu.addSeparator()
         project_menu.addAction(i18n.tr("关闭项目界面"), self.close)
 
+        # 视图：主题与语言（与主界面同一套构造，别让用户在两个窗口里找不同地方）
+        view = bar.addMenu("视图(&V)")
+        view.addAction(
+            i18n.tr("切换到浅色主题") if design.manager().is_dark else i18n.tr("切换到深色主题"),
+            self._toggle_theme,
+        )
+        from .language_menu import build_language_menu
+
+        view.addMenu(build_language_menu(self, self.config, self._save_config))
+
         help_menu = bar.addMenu("帮助(&H)")
         help_menu.addAction("关于", self._show_about)
 
@@ -1386,6 +1396,21 @@ class ProjectWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self._apply_project_config(dialog.values())
+
+    def _toggle_theme(self) -> None:
+        """深色 ↔ 浅色：整个应用共用一份主题，切换后立即生效并记住。"""
+
+        theme = design.toggle_theme()
+        self.config.ui_theme = theme.name
+        self._save_config("主题偏好")
+
+    def _save_config(self, what: str) -> None:
+        """配置落盘（项目界面自己那份 config，保存失败只记日志不打扰）。"""
+
+        try:
+            self.config.save()
+        except OSError as error:
+            logger().warning("%s没保存下来：%s", what, error)
 
     def _delete_this_project(self) -> None:
         """删除这个项目：问清楚"只移除登记"还是"连目录一起删"，然后关掉本窗口。

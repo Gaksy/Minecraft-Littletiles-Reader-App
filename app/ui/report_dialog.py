@@ -152,6 +152,22 @@ class ReportDialog(QDialog):
         row.addWidget(self.severity_box, 1)
         layout.addLayout(row)
 
+        # 惯用语言：回复按它给译文（与网站反馈页同一个选项、同一套语义）
+        self.locale_box = QComboBox()
+        for code, name in i18n.LANGUAGES:
+            self.locale_box.addItem(name, code)
+        wanted = getattr(self.config, "report_locale", "") or i18n.current()
+        index = self.locale_box.findData(wanted)
+        if index >= 0:
+            self.locale_box.setCurrentIndex(index)
+        layout.addWidget(self.locale_box)
+        self.locale_hint = QLabel()
+        wrap(self.locale_hint)
+        design.set_role(self.locale_hint, "hint")
+        layout.addWidget(self.locale_hint)
+        self.locale_box.currentIndexChanged.connect(self._refresh_locale_hint)
+        self._refresh_locale_hint()
+
         label = QLabel(i18n.tr("详细描述"))
         design.set_role(label, "section")
         layout.addWidget(label)
@@ -244,6 +260,17 @@ class ReportDialog(QDialog):
 
     # ---- 预览 ----
 
+    def _refresh_locale_hint(self) -> None:
+        """简体中文不用翻译，直接说清楚；其它语言说明会附中文原文对照。"""
+
+        code = self.locale_box.currentData()
+        if code == "zh-Hans":
+            self.locale_hint.setText(i18n.tr("回复直接用中文，不需要翻译。"))
+        else:
+            self.locale_hint.setText(
+                i18n.tr("回复会按这个语言给出翻译（AI 翻译），并附中文原文供对照。")
+            )
+
     def _draft(self) -> Report:
         report = Report(
             title=self.title_edit.text().strip(),
@@ -251,8 +278,8 @@ class ReportDialog(QDialog):
             type=self.type_box.currentData(),
             severity=self.severity_box.currentData(),
             contact=self.contact_edit.text().strip(),
-            # 惯用语言 = 应用当前界面语言：后台回复按它给译文（另附中文原文对照）
-            locale=i18n.current(),
+            # 惯用语言：默认跟当前界面语言，可在表单里改（与网站反馈页一致）
+            locale=self.locale_box.currentData() or i18n.current(),
         )
         if self.attach.isChecked():
             report.diagnostics = self._diagnostics
@@ -333,6 +360,7 @@ class ReportDialog(QDialog):
         design.set_role(self.result, "ok")
         if report.contact:
             self.config.report_contact = report.contact
+        self.config.report_locale = report.locale      # 下次默认用这次选的
 
     def _upload_logs(self, token: str) -> str:
         bundle = collect_logs_tar(

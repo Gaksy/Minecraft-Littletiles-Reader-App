@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QEventLoop, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QActionGroup, QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -369,23 +369,12 @@ class MainWindow(QMainWindow):
 
         view = bar.addMenu("视图(&V)")
         self.action_theme = view.addAction(self._theme_action_text(), self._toggle_theme)
-        # 语言：改完写进配置，重启后生效（Qt 的文案是死值，重启最不容易出半截界面）
-        language = view.addMenu("语言")
-        group = QActionGroup(self)
-        group.setExclusive(True)
-        for code, name in i18n.LANGUAGES:
-            action = language.addAction(name)
-            action.setCheckable(True)
-            action.setChecked(code == i18n.current())
-            action.triggered.connect(lambda _checked=False, chosen=code: self._set_language(chosen))
-            group.addAction(action)
-        self.language_group = group
-        language.addSeparator()
-        follow = language.addAction("跟随系统")
-        follow.setCheckable(True)
-        follow.setChecked(not self.config.language)
-        follow.triggered.connect(lambda _checked=False: self._set_language(""))
+        # 语言：与项目界面共用同一份构造（app/ui/language_menu.py）
+        from .language_menu import build_language_menu
 
+        view.addMenu(
+            build_language_menu(self, self.config, self._save_config)
+        )
         # 应用级操作放最后：都是"按了有明显后果"的东西
         app_menu = bar.addMenu("应用(&A)")
         app_menu.addAction("清空所有数据", self._reset_app_data)
@@ -399,16 +388,15 @@ class MainWindow(QMainWindow):
         i18n.translate(self)
 
     def _set_language(self, code: str) -> None:
-        """切换界面语言：写进配置，提示重启。"""
+        """切换界面语言（兼容旧调用点；菜单本身走 app/ui/language_menu.py）。"""
 
         chosen = code or i18n.system_language()
         self.config.language = code
         self._save_config("语言")
         logger().info("界面语言改为 %s（重启后生效）", code or "跟随系统")
         popup.info(
-            self,
-            "语言",
-            "界面语言已切换为 %s，重启应用后生效。" % i18n.display_name(chosen),
+            self, i18n.tr("语言"),
+            i18n.tr("界面语言已切换为 %s，重启应用后生效。") % i18n.display_name(chosen),
         )
 
     def _theme_action_text(self) -> str:

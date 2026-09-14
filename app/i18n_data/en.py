@@ -571,4 +571,9 @@ STRINGS = {
 
     # ---- 回复标记 ----
     'AI 翻译': 'AI-translated',
+
+    # ---- 反馈的惯用语言 ----
+    '惯用语言': 'Preferred language',
+    '回复直接用中文，不需要翻译。': 'Replies are written directly in Chinese — no translation needed.',
+    '回复会按这个语言给出翻译（AI 翻译），并附中文原文供对照。': 'Replies will be translated into this language (by AI), with the Chinese original attached.',
 }

@@ -63,6 +63,7 @@ class AppConfig:
     # ---- 与服务器（inception-work）的联动 ----
     server_base: str = ""            # 空 = 用 app.api.DEFAULT_BASE（https://www.inception.work/api）
     report_contact: str = ""         # 上次填过的联系方式，下次反馈自动带出来
+    report_locale: str = ""          # 上次选的惯用语言（空 = 跟当前界面语言）
     check_update_on_start: bool = True   # 启动时静默查一次（每天最多一次）
     last_update_check: str = ""      # 上次检查日期（YYYY-MM-DD），用来做"每天一次"
     last_feedback_check: str = ""    # 上次查反馈状态的日期（同样每天一次）
