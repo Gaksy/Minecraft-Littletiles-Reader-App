@@ -187,10 +187,15 @@ def pyinstaller_command(name: str, with_reader: bool) -> list[str]:
     return command
 
 
-def copy_reader(target_dir: Path, explicit: str | None = None) -> None:
+def copy_reader(target_dir: Path, explicit: str | None = None,
+                app_bundle: Path | None = None) -> None:
     """把库编出来的 CLI 拷到包根（形态 B）。
 
     `--reader` 给了就用它（Windows 上常见 Release 目录），否则按 `ltgen.paths` 找。
+
+    macOS 上传了 `app_bundle` 就**塞进 .app 里面**
+    （`Contents/Frameworks/reader/`）：这样 DMG 里只有一个 `.app`，用户拖一个就完事，
+    不用理解"旁边还得跟着两个文件"。Windows 没有 .app 这层，仍然放在包根。
     """
 
     if explicit:
@@ -205,15 +210,19 @@ def copy_reader(target_dir: Path, explicit: str | None = None) -> None:
             "先在库仓库构建一次（见 docs/packaging-howto.md 的第 2 步），"
             "或显式指定 --reader <路径>" % executable
         )
-    destination = target_dir / executable.name
+    lib_dir = target_dir
+    if app_bundle is not None:
+        lib_dir = app_bundle / "Contents" / "Frameworks" / "reader"
+        lib_dir.mkdir(parents=True, exist_ok=True)
+    destination = lib_dir / executable.name
     shutil.copy2(executable, destination)
-    print("已放入 reader：%s" % executable.name)
+    print("已放入 reader：%s" % destination.relative_to(target_dir))
     if sys.platform == "darwin":
-        relocate_macos_libraries(destination, target_dir)
+        relocate_macos_libraries(destination, lib_dir)
     else:
         # Windows：CMake 会把 nbt++.dll 放在 exe 旁边（或 vcpkg 的 bin 里），一起拷走
         for lib in executable.parent.glob("*.dll"):
-            shutil.copy2(lib, target_dir / lib.name)
+            shutil.copy2(lib, lib_dir / lib.name)
 
 
 #: 系统自带的库不用跟着走（用户机器上一定有）。
@@ -345,8 +354,18 @@ def sign_macos(target_dir: Path) -> None:
                        check=False, capture_output=True)
 
 
-def copy_docs(target_dir: Path, with_reader: bool = False) -> None:
-    """许可与说明随包发（LGPL/OFL/GPL 都要求带上文本，别漏）。"""
+def copy_docs(target_dir: Path, with_reader: bool = False,
+              app_bundle: Path | None = None) -> None:
+    """许可与说明随包发（LGPL/OFL/GPL 都要求带上文本，别漏）。
+
+    macOS 上传了 `app_bundle` 就放进 `Contents/Resources/`——理由同 copy_reader：
+    DMG 里只有一个 `.app`，文本跟着 app 一起走（`app/licenses.py` 会去那儿找全文
+    给用户翻）。
+    """
+
+    if app_bundle is not None:
+        target_dir = app_bundle / "Contents" / "Resources"
+        target_dir.mkdir(parents=True, exist_ok=True)
 
     for name in ("LICENSE", "THIRD-PARTY.md", "README-unsigned.md"):
         source = ROOT / "packaging" / name if name == "README-unsigned.md" else ROOT / name
@@ -412,9 +431,9 @@ def install_note() -> str:
 def make_dmg(folder: Path) -> Path | None:
     """把整个包做成 DMG（macOS 用户习惯的那个"安装包"）。
 
-    卷里放的是**一个文件夹**，不是散着的文件：这套东西是"应用 + 同目录 CLI +
-    动态库"三件套，散开放最容易让人只拖走 .app（那就导不出模型了）。
-    旁边再放一个「应用程序」软链，按 macOS 的习惯指个方向。
+    卷里只有**一个可拖的 `.app`**，加一个「应用程序」软链和一份安装说明：
+    库的 CLI 与动态库都塞在 app 内部（`Contents/Frameworks/reader/`），
+    许可全文也在 app 里（`Contents/Resources/`），所以用户拖一个图标就装完了。
     """
 
     stage = BUILD / "dmg"
@@ -423,7 +442,11 @@ def make_dmg(folder: Path) -> Path | None:
     stage.mkdir(parents=True)
     # symlinks=True 必须带：.app 里 Frameworks ↔ Resources 之间全是软链，
     # 拷成实体文件签名就废了（和 zip 必须用 ditto 是同一个道理）。
-    shutil.copytree(folder, stage / "LittleTilesReader", symlinks=True)
+    app = next(iter(folder.glob("*.app")), None)
+    if app is None:
+        print("没找到 .app，跳过 DMG")
+        return None
+    shutil.copytree(app, stage / app.name, symlinks=True)
     (stage / "Applications").symlink_to("/Applications")
     (stage / "安装说明.txt").write_text(install_note(), encoding="utf-8")
 
@@ -506,9 +529,13 @@ def main() -> int:
         print("已放入应用：%s（裸 onedir 是同一份内容的中间产物，不随包发）" % app_bundle.name)
         write_bundle_version(target / app_bundle.name)
 
+    packed_app = (target / app_bundle.name) if built is app_bundle else None
     if args.with_reader:
-        copy_reader(target, args.reader)
-    copy_docs(target, args.with_reader)
+        copy_reader(target, args.reader, packed_app)
+    copy_docs(target, args.with_reader, packed_app)
+    if packed_app is not None:
+        # 用户从 DMG 里只看到这一个图标，说明就放它旁边（卷根）
+        (target / "安装说明.txt").write_text(install_note(), encoding="utf-8")
     if sys.platform == "darwin":
         # 未签名发布：至少给出 ad-hoc 签名，否则 arm64 上会被 Gatekeeper 直接杀掉
         sign_macos(target)

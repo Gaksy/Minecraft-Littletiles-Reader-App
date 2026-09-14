@@ -128,6 +128,60 @@ def main() -> int:
             else:
                 sys._MEIPASS = saved[3]  # type: ignore[attr-defined]
 
+    # 现在的 macOS 布局：CLI 塞在 .app 里面（Contents/Frameworks/reader/），
+    # 这样 DMG 里只有一个可拖的 app。定位必须能找到它。
+    with tempfile.TemporaryDirectory(prefix="lt-inside-") as tmp:
+        bundle = Path(tmp).resolve()
+        app = bundle / "LittleTilesReader.app"
+        app_exe = app / "Contents" / "MacOS" / "LittleTilesReader"
+        app_exe.parent.mkdir(parents=True)
+        app_exe.write_text("", encoding="utf-8")
+        unpacked = app / "Contents" / "Frameworks"
+        inside = unpacked / "reader"
+        inside.mkdir(parents=True)
+        cli = inside / "LittleTilesReader"
+        cli.write_text("", encoding="utf-8")
+        # app 旁边**故意不放** CLI：只有 app 内部那一份
+        saved = (getattr(sys, "frozen", None), sys.executable, getattr(sys, "_MEIPASS", None))
+        sys.frozen = True          # type: ignore[attr-defined]
+        sys.executable = str(app_exe)
+        sys._MEIPASS = str(unpacked)  # type: ignore[attr-defined]
+        try:
+            found = reader.bundled_reader()
+            check("app 内部的 CLI 能找到", found is not None and found.resolve() == cli.resolve(),
+                  str(found))
+            check("项目界面同样拿到它",
+                  _cli_path(AppConfig()).resolve() == cli.resolve(), str(_cli_path(AppConfig())))
+        finally:
+            if saved[0] is None:
+                del sys.frozen      # type: ignore[attr-defined]
+            else:
+                sys.frozen = saved[0]  # type: ignore[attr-defined]
+            sys.executable = saved[1]
+            if saved[2] is None:
+                del sys._MEIPASS    # type: ignore[attr-defined]
+            else:
+                sys._MEIPASS = saved[2]  # type: ignore[attr-defined]
+
+    # 装到 /Applications：数据目录必须回退到用户目录，别往系统目录里堆 config/logs
+    from app.config import data_dir
+
+    saved = (sys.platform, getattr(sys, "frozen", None), sys.executable)
+    sys.platform = "darwin"
+    sys.frozen = True          # type: ignore[attr-defined]
+    sys.executable = "/Applications/LittleTilesReader.app/Contents/MacOS/LittleTilesReader"
+    try:
+        resolved = data_dir()
+    finally:
+        sys.platform = saved[0]
+        if saved[1] is None:
+            del sys.frozen      # type: ignore[attr-defined]
+        else:
+            sys.frozen = saved[1]  # type: ignore[attr-defined]
+        sys.executable = saved[2]
+    check("装在 /Applications 时不往系统目录写数据",
+          str(resolved).startswith(str(Path.home())), str(resolved))
+
     print()
     if FAILURES:
         print("失败 %d 项: %s" % (len(FAILURES), ", ".join(FAILURES)))

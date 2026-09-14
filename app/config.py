@@ -18,6 +18,12 @@ from pathlib import Path
 # 代码目录（只读资源：字体、图标、模板都在这里）
 APP_DIR = Path(__file__).resolve().parents[1]
 
+#: 系统级应用目录：装在这儿就别往旁边写数据（那里不该堆 config/logs/outputs）
+SYSTEM_APP_FOLDERS = frozenset({
+    Path("/Applications"),
+    Path("/System/Applications"),
+})
+
 
 def bundle_root() -> Path:
     """**只读资源**的根：`tools/` 这类随包分发、运行时不改的东西。
@@ -51,6 +57,12 @@ def data_dir() -> Path:
         from .reader import app_folder
 
         candidate = app_folder()
+        # 例外：/Applications 这类系统目录。用户拖进去就算了，别把 config/logs/outputs
+        # 堆在系统目录里（拖到 ~/Applications 或任意文件夹仍然是便携的）。
+        if candidate in SYSTEM_APP_FOLDERS:
+            fallback = _user_data_dir()
+            logger().info("应用装在系统目录（%s），数据改放：%s", candidate, fallback)
+            return fallback
         try:
             probe = candidate / ".ltr-write-test"
             probe.write_text("", encoding="utf-8")

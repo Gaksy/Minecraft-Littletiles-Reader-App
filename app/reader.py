@@ -37,22 +37,36 @@ def app_folder() -> Path:
 
 
 def search_dirs() -> list[Path]:
-    """会在哪些目录里找 CLI（顺序即优先级）。"""
+    """会在哪些目录里找 CLI（顺序即优先级）。
+
+    打包版里 CLI 有两处可能的落点，都要认：
+
+    * **app 里面**（现在的方式）：`<app>/Contents/Frameworks/reader/`——
+      这样 DMG 里只有一个 `.app`，用户拖一个就装完了；
+    * **app 旁边**（老方式 / 便携版）：与 `.app` 同级。
+
+    Windows 又多一层：应用自己在 `<包>/LittleTilesReader/`，CLI 在上一层
+    `<包>/LittleTilesReader.exe`。
+    """
 
     here = app_folder()
-    dirs = [here]
-    # macOS 包内：资源放在 Contents/Resources，构建脚本把库拷在 .app 外面，
-    # 但也支持"塞进 .app 里面"的玩法，所以顺手也找一下这两个位置。
+    dirs = [here / "reader", here]
     if getattr(sys, "frozen", False):
         bundle = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", "") else None
         if bundle:
+            dirs.append(bundle / "reader")   # macOS .app：库 CLI 塞在包内
             dirs.append(Path(bundle))
         exe = Path(sys.executable).resolve()
         dirs.append(exe.parent)
         # Windows 的包结构是 <包>/LittleTilesReader/LittleTilesReader.exe（应用自己），
         # 而库的 CLI 在上一层 <包>/LittleTilesReader.exe——所以上一层必须也找。
         dirs.append(here.parent)
-    return dirs
+    # 去重且保序（同一个目录可能被上面几种写法重复命中）
+    unique: list[Path] = []
+    for folder in dirs:
+        if folder not in unique:
+            unique.append(folder)
+    return unique
 
 
 def bundled_reader() -> Path | None:

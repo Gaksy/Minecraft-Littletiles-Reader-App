@@ -69,18 +69,25 @@ TEXT_FILES: tuple[tuple[str, str], ...] = (
 def texts() -> list[tuple[str, str]]:
     """可展示的全文：`[(标题, 内容)]`，找不到的文件自动跳过。"""
 
-    root = bundle_root()
+    roots = [bundle_root()]
+    # macOS 的 .app 里，Frameworks（= 解包目录）与 Resources 是兄弟目录；
+    # 打包脚本把许可放在 Contents/Resources/，所以两边都要找。
+    sibling = bundle_root().parent / "Resources"
+    if sibling.is_dir():
+        roots.append(sibling)
     found: list[tuple[str, str]] = []
     for relative, title in TEXT_FILES:
-        path = root / relative
-        if not path.is_file():
-            path = root / "packaging" / relative       # 开发环境：仓库里的同一份
-        if not path.is_file():
-            continue
-        try:
-            found.append((title, path.read_text(encoding="utf-8", errors="replace")))
-        except OSError:
-            continue
+        for root in roots:
+            path = root / relative
+            if not path.is_file():
+                path = root / "packaging" / relative   # 开发环境：仓库里的同一份
+            if not path.is_file():
+                continue
+            try:
+                found.append((title, path.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                continue
+            break
     return found
 
 

@@ -146,14 +146,15 @@ python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader
 3. **挑一份搬进最终目录**：macOS 上 PyInstaller 会同时产出 `LittleTilesReader.app`
    （自包含，用户双击的就是它）和 `LittleTilesReader/`（裸 onedir，`.app` 就是从它拼出来的）。
    两份内容是重复的，都发出去 = Qt 打两遍、体积翻倍，所以只搬 `.app`；
-4. 把 CLI 拷进包根，**并修好它的动态库依赖**（见下方"动态库为什么要改"）；
+4. 把 CLI **塞进 `.app` 里面**（macOS：`Contents/Frameworks/reader/`；Windows 放包根），
+   **并修好它的动态库依赖**（见下方"动态库为什么要改"）；
 5. 显式收集"运行时才 import"的模块（`--collect-submodules ltgen` +
    扫 `tools/` 那几个运行时脚本的依赖），见下方"为什么会有这一步"；
-6. 拷 `LICENSE`、`THIRD-PARTY.md`、`README-unsigned.md`、
-   `GPL-3.0.txt`、`LGPL-3.0.txt`、`OFL.txt`；
+6. 拷许可文本（macOS 进 `.app` 的 `Contents/Resources/`；Windows 放包根）：
+   `LICENSE`、`THIRD-PARTY.md`、`README-unsigned.md`、`OFL.txt` 与 `licenses/`；
 7. 做一次 ad-hoc 签名（macOS，改过 Mach-O 之后必须重签，否则 arm64 上直接被杀）；
 8. **打 DMG**（macOS，`hdiutil`）——这才是 macOS 用户习惯的"安装包"，见下方
-   "DMG 里为什么是一个文件夹"；
+   "DMG 里只有一个 .app"；
 9. 打 zip（macOS 用 `ditto`）并打印两个 **SHA-256**（DMG 与 zip 各一个）。
 
 ### 为什么会有"显式收集运行时模块"这一步
@@ -188,29 +189,38 @@ import enable_utf8_output` 就成了漏网的依赖——真机上表现为
 验证（解压后必须是这样）：
 
 ```sh
-otool -L dist/app/LittleTilesReader-*/LittleTilesReader
+otool -L dist/app/LittleTilesReader-*/LittleTilesReader.app/Contents/Frameworks/reader/LittleTilesReader
 #   @executable_path/libnbt++.dylib   ← 必须是这个，不能是 @rpath 或绝对路径
 ```
 
-### DMG 里为什么是"一个文件夹"而不是散着的文件
+### DMG 里只有一个 `.app`
 
-macOS 用户的习惯是"打开 DMG → 把 app 拖进 Applications"，但这个应用的拖拽单元
-**必须是文件夹**：
+曾经的样子是"DMG 里放一个文件夹，让用户把整个文件夹拖走"，因为库的 CLI 与
+`libnbt++.dylib` 当时放在 `.app` 外面。那对用户不友好：要理解"这个文件夹是个整体"。
+
+现在 CLI 与 dylib 都塞进了 `Contents/Frameworks/reader/`，许可文本进了
+`Contents/Resources/`，所以卷里就三样东西：
 
 ```
 LittleTiles Reader 0.1.0（磁盘映像卷）
-├── LittleTilesReader/        ← 拖这个（里面才是 .app + CLI + dylib + 许可）
-│   ├── LittleTilesReader.app
-│   ├── LittleTilesReader     ← 库的 CLI，客户端按"同目录"找它
-│   ├── libnbt++.dylib
-│   └── LICENSE / THIRD-PARTY.md / README-unsigned.md / OFL.txt / licenses/
-├── Applications -> /Applications   ← 按 macOS 习惯指个方向
-└── 安装说明.txt               ← packaging/install-note.txt 生成的面向用户的说明
+├── LittleTilesReader.app        ← 拖这一个到「应用程序」就装完了
+├── Applications -> /Applications
+└── 安装说明.txt                  ← packaging/install-note.txt（含自签名放行办法与源码链接）
 ```
 
-散开放（根目录直接是 `.app` + CLI + dylib）的话，用户十有八九只把 `.app` 拖走，
-结果就是"界面能开、一按导出就报找不到 LittleTilesReader"。所以 DMG 里放整个文件夹，
-并在「安装说明.txt」第一段就写清楚"要拖整个文件夹"。
+代价与取舍：
+
+* `Contents/Resources/` 里塞了一个可执行文件（Apple 的惯例是放 `Frameworks/`），
+  所以 CLI 放 `Frameworks/reader/`、**许可文本**放 `Resources/`——两边都要照顾到；
+  对应地 `app/reader.py` 找 `_MEIPASS/reader`、`app/licenses.py` 同时看
+  `_MEIPASS` 与它兄弟目录 `Resources/`；
+* 装到 `/Applications` 时，"数据放在应用旁边"就变成往系统目录里堆 config/logs 了，
+  所以 `app/config.py` 把 `/Applications`、`/System/Applications` 列为例外，
+  数据改放 `~/Library/Application Support/LittleTilesReader`；
+  拖到别处（含 `~/Applications`）仍然是便携的，数据就在应用旁边。
+
+> 千万不要为了"看着整齐"把 CLI 从 `.app` 里挪回包根又只发 `.app`：
+> 那会变成"界面能开、一按导出就报找不到 LittleTilesReader"。
 
 DMG 用 `hdiutil create -format UDZO -fs HFS+` 打（UDZO = 压缩只读，HFS+ 兼容性更好）；
 卷里的内容用 `shutil.copytree(..., symlinks=True)` 拷，**软链必须保住**，理由同下。
@@ -245,18 +255,30 @@ known parent package` ——**构建能过、双击起不来**。所以入口用
 
 ```
 dist/app/LittleTilesReader-<版本>-<平台>/
-├── LittleTilesReader.app          # macOS：双击启动（Windows 上是 LittleTilesReader.exe + _internal/）
-├── LittleTilesReader              # ← 库的 CLI，与客户端同目录
-├── libnbt++.dylib                 # macOS：CLI 的依赖，已改成 @executable_path 引用
-├── LICENSE / THIRD-PARTY.md / README-unsigned.md / OFL.txt
-├── licenses/                      # LGPL-3.0 + （含库时）GPL-3.0 / BSL-1.0 / zlib
+├── LittleTilesReader.app/         # macOS：拖这一个就装完了（库和许可都在它里面）
+├── 安装说明.txt                    # packaging/install-note.txt（给用户的说明）
 └── （首次运行后自动生成）config/ logs/ outputs/ tmp/
 dist/app/LittleTilesReader-<版本>-macos-arm64.dmg   ← macOS 用户下载这个（双击挂载）
 dist/app/LittleTilesReader-<版本>-<平台>.zip        ← 通用/备用，Windows 只有这个
 ```
 
-> macOS 的包**只有 `.app`**，没有裸 onedir（原因见上一节）。`LittleTilesReader`
-> 与 `.app` 同级不是随手放的：`app/reader.py` 就是去 `.app` 所在文件夹找它。
+macOS 的 `.app` 里面（用户不用关心，但排障时要看）：
+
+```
+LittleTilesReader.app/Contents/
+├── MacOS/LittleTilesReader              # 应用本体
+├── Frameworks/                          # PyInstaller 的运行时（= sys._MEIPASS）
+│   ├── reader/LittleTilesReader         # ← 库的 CLI
+│   ├── reader/libnbt++.dylib            # ← 它的依赖（@executable_path 引用）
+│   └── app/ tools/ ...                  # 只读资源（字体、block_ids.tsv、生成端脚本）
+└── Resources/
+    ├── LICENSE / THIRD-PARTY.md / README-unsigned.md / OFL.txt
+    └── licenses/                        # LGPL-3.0 +（含库时）GPL-3.0 / BSL-1.0 / zlib
+```
+
+> macOS 的包**没有裸 onedir**（原因见上一节），也没有"旁边还要跟着两个文件"这回事——
+> CLI 与 dylib 都在 `Frameworks/reader/` 里，所以 DMG 里只剩一个可拖的 app。
+> `app/reader.py` 的查找顺序里 `_MEIPASS/reader` 就是为了这一条。
 
 Windows 的同一层结构（名字不一样，位置一样）：
 
@@ -340,19 +362,23 @@ SIM=/tmp/ltr-user-sim2 && mkdir -p "$SIM" && cd "$SIM"
 # ① 解压（用 ditto，跟 Finder 行为一致）
 ditto -x -k "$APP/dist/app/LittleTilesReader-0.1.0-macos-arm64.zip" .
 PKG="$SIM/LittleTilesReader-0.1.0-macos-arm64"
+CLI="$PKG/LittleTilesReader.app/Contents/Frameworks/reader/LittleTilesReader"
 
 # ② 软链有没有被压坏 + 签名还完好吗（两条都必须过）
-ls -la "$PKG/LittleTilesReader.app/Contents/Resources/" | head
+ls -la "$PKG/LittleTilesReader.app/Contents/Frameworks/reader/"
 codesign --verify --deep --strict "$PKG/LittleTilesReader.app"
 
 # ③ 依赖是不是 @executable_path（不能是 @rpath，也不能是绝对路径）
-otool -L "$PKG/LittleTilesReader"
+otool -L "$CLI"
 
-# ④ 最狠的一条：清空环境变量、假 HOME、只留包内 PATH，跑一次真实导出
-env -i HOME="$SIM/fakehome" PATH=/usr/bin:/bin:"$PKG" \
-    "$PKG/LittleTilesReader" --job "$SIM/job-base.json" --progress json
+# ④ 最狠的一条：清空环境变量、假 HOME，跑一次真实导出（库就在 app 里面）
+env -i HOME="$SIM/fakehome" PATH=/usr/bin:/bin \
+    "$CLI" --job "$SIM/job-base.json" --progress json
 
-# ⑤ GUI：用 open 启动（launchd 接管，不会随终端退出）
+# ⑤ 挂上 DMG，确认卷里只有一个可拖的 app（用户看到的就是这个）
+hdiutil attach "$APP/dist/app/LittleTilesReader-0.1.0-macos-arm64.dmg" -nobrowse
+
+# ⑥ GUI：用 open 启动（launchd 接管，不会随终端退出）
 open -n "$PKG/LittleTilesReader.app"
 tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 ```
@@ -364,7 +390,11 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 * ⑤ 的日志：`应用目录: …`、`像素字体已加载`、`库版本：0.2.0-beta（…/LittleTilesReader）`、
   `库 CLI: …（存在=True）` —— 客户端确实找到并调起了同目录的 CLI；
 * 首次启动的许可弹窗确认"不勾选点不动同意"（按钮初值是 `setEnabled(False)`）；
-* 体积：目录 **113.3 MB**、zip **39.6 MB**、DMG **44.8 MB**；
+* 体积：目录 **113.3 MB**、zip **39.6 MB**、DMG **44.7 MB**；
+* DMG 卷里只有 `LittleTilesReader.app` + `Applications` 软链 + `安装说明.txt`；
+  卷内 `codesign --verify --deep --strict` 通过，`--self-check` 与隔离环境真实导出都过；
+* 把 app 放到 `/Applications` 时数据目录会退到 `~/Library/Application Support/`
+  （`tests/test_reader_locate.py` 覆盖），拖到别处仍然是便携的；
 * DMG 挂上去再跑一遍自检 + 隔离环境真实导出，同样通过；
 * 脚本自检：`tests/` 下 25 个脚本全过。
 
@@ -401,7 +431,7 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 | CLI 报 `Library not loaded: @rpath/libnbt++.dylib` | 动态库没随包 / rpath 还是本机绝对路径，见"动态库为什么要改"；`otool -L` 一查就知道 |
 | `cmake` 报 `make: /Applications/Xcode: No such file or directory` | 本机 `xcode-select` 指向带空格的 `Xcode Bata.app`。用 `-G Ninja`，或 `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` |
 | 解压出来的 `.app` 打不开、提示"已损坏" | zip 没用 `ditto` 打：zipfile 把软链展开成实体文件，签名就废了。重打一次（脚本已在 macOS 上走 `ditto`） |
-| 界面能开，但导出报"找不到 LittleTilesReader" | 第 2 步没编库 / `--with-reader` 没加；确认 CLI 就在 `.app` 同级（macOS）或 exe 同级（Windows） |
+| 界面能开，但导出报"找不到 LittleTilesReader" | 第 2 步没编库 / `--with-reader` 没加。macOS 上 CLI 应在 `.app/Contents/Frameworks/reader/`，Windows 上在包根；用 `--self-check` 一看就知道找没找到 |
 | 中文变方框 | 字体没随包：确认 `app/resources/fonts/` 在 `_internal` 里（`--add-data` 已包含） |
 | 双击没反应（macOS） | 未签名被拦，照 `README-unsigned.md`；或直接跑 `.app/Contents/MacOS/LittleTilesReader` 看终端输出（**最快的排查手段**） |
 | 导出产物找不到 | 数据目录就在应用文件夹（首次运行后出现 `outputs/`）；也看「关于」与日志里写的路径 |
