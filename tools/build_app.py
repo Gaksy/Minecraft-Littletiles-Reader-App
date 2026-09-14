@@ -19,18 +19,22 @@ python tools/build_app.py --no-zip        # 只出目录，不压缩（调试用
   GPL-3.0-or-later**（`docs/licenses.md`）；形态 A 不带 reader 时应用自身是 MIT；
 * 图标：`packaging/app.ico` / `app.icns` 存在就用，不存在就跳过（不阻塞构建）。
 
-产物：`dist/app/LittleTilesReader-<版本>-<平台>/`（+ 同名 `.zip`）。
+产物：`dist/app/LittleTilesReader-<版本>-<平台>/`
+      + 同名 `.zip`（通用/备用）
+      + macOS 上再出 `.dmg`、Windows 上再出 `.msi`——这两个才是用户双击安装的那个。
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -72,6 +76,207 @@ DATA = [
     ("app/data", "app/data"),                # block_ids.tsv（普通方块贴图要用）
     ("tools", "tools"),                      # 生成端脚本：进程内调用，必须随包
 ]
+
+#: MSVC 运行时 DLL。conda 环境里会有**两份**（`<env>\Library\bin` 一份、
+#: `site-packages\PySide6\` 一份），版本还不一样；PyInstaller 各收各的，于是包里
+#: 出现两个不同版本的 `MSVCP140.dll`。Windows 加载器先命中 `_internal\` 那份旧的，
+#: 而按新版编译的 Qt6Widgets 要的导出符它没有 —— 实测报
+#: `ImportError: DLL load failed while importing QtWidgets: The specified procedure
+#: could not be found.`（冻包能构建、双击起不来）。所以打完包必须统一成同一份。
+MSVC_RUNTIME_NAMES = (
+    "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+    "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll",
+)
+
+#: PATH 里这些目录带着**别的版本**的同名 DLL（实测：Codex 运行时自带 poppler/libheif，
+#: 里面是 ICU 78，而 conda 的 PySide6 是照 ICU 73 编的）。PyInstaller 顺着 PATH 分析
+#: 依赖时会把 78 收进包 —— Qt6Core 加载时报
+#: `The specified procedure could not be found`（ICU 的符号名带版本后缀，换了大版本就对不上）。
+#: 所以打包时把这类目录从 PATH 里剔掉，并且**打完包用干净环境真跑一次自检**兜底。
+PATH_TOXIC_MARKERS = (
+    r".cache\codex-runtimes\\",
+    r".codex\tmp\arg0\\",
+)
+
+#: 这些运行时依赖一律以**构建环境（conda 环境）里的那份**为准：PyInstaller 有可能从
+#: PATH 里收到同名但版本不同的文件（见上）。
+ENV_AUTHORITATIVE_DEPS = ("zlib", "zstd", "libssl", "libcrypto", "pcre2")
+
+#: **绝不随包带的依赖：ICU。**
+#:
+#: 这台机器上能拿到的 ICU（conda 的 73、代理运行时的 78）导出的符号是**带版本后缀**的
+#: （`ucnv_open_73` / `ucnv_open_78`），而 Windows 自带的 ICU（Win10 1903+ 的 `icu.dll`，
+#: 由 System32 的 `icuuc.dll` 转发）导出的是**无后缀**的 `ucnv_open` —— conda 的
+#: PySide6/Qt6Core 恰好按后者编译（实测：pefile 逐个比对导入/导出表）。
+#:
+#: 所以 PyInstaller 顺手把 73/78 打进包，反而**盖住系统那份正确的**，Qt6Core 加载时报
+#: `The specified procedure could not be found`（构建成功、双击起不来）。
+#: 结论：这类 DLL 一份都不许进包，交给系统。代价是要求 Windows 10 1903+ / 11。
+NEVER_BUNDLE_STEMS = ("icuuc", "icuin", "icuio", "icutu", "icudt", "icutest")
+
+
+def _local_dll_dirs() -> list[Path]:
+    """当前 Python 环境里放 DLL 的几个目录（PySide6 在最前，它才是 Qt 的家）。
+
+    conda 的 **env 常常不自带 ICU**（实测：`envs/<名字>` 里没有 icu*.dll，真正那份在
+    base 安装的 `Library\\bin`），所以要把 base 的目录也带上 —— 否则"对齐"会把包里的
+    ICU 删掉却没有替换，冻包直接起不来。
+    """
+
+    env_root = Path(sys.executable).resolve().parent
+    roots = [env_root]
+    for parent in env_root.parents:
+        if (parent / "conda-meta").is_dir() or (parent / "Library" / "bin").is_dir():
+            roots.append(parent)
+        if len(roots) >= 3:
+            break
+    candidates: list[Path] = []
+    for root in roots:
+        candidates += [
+            root / "Lib" / "site-packages" / "PySide6",
+            root / "Lib" / "site-packages" / "shiboken6",
+            root / "Library" / "bin",
+            root / "DLLs",
+            root,
+        ]
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in candidates:
+        if path.is_dir() and path not in seen:
+            seen.add(path)
+            result.append(path)
+    return result
+
+
+def clean_build_env() -> dict:
+    """给 PyInstaller 用的环境：PATH 里剔掉会带错版本 DLL 的目录。"""
+
+    env = dict(os.environ)
+    entries = []
+    for entry in env.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        lowered = entry.lower()
+        if any(marker.lower() in lowered for marker in PATH_TOXIC_MARKERS):
+            continue
+        entries.append(entry)
+    # 本环境的 DLL 目录放最前面，依赖解析先看它们
+    env["PATH"] = os.pathsep.join([str(p) for p in _local_dll_dirs()] + entries)
+    return env
+
+
+def align_runtime_dependencies(package_dir: Path) -> list[str]:
+    """收拾包里那几个"运行时会找错"的依赖。
+
+    两件事：
+    1. `NEVER_BUNDLE_STEMS`（ICU 一族）**全部删掉** —— 它们会盖住 Windows 自带那份，
+       而 Qt 要的正是系统那份无版本后缀的 ABI（详见常量上的注释）；
+    2. 其余同名依赖（zlib / openssl / pcre2…）以构建环境里的那份为准：环境里是什么
+       版本，包里就是什么版本；环境里没有同名文件、包里却有的，删掉。
+    """
+
+    dirs = _local_dll_dirs()
+    aligned: list[str] = []
+
+    if NEVER_BUNDLE_STEMS:
+        for path in sorted(package_dir.rglob("*.dll")):
+            name = path.name.lower()
+            if any(name.startswith(stem) for stem in NEVER_BUNDLE_STEMS):
+                path.unlink()
+                aligned.append("-%s" % path.name)
+
+    for stem in ENV_AUTHORITATIVE_DEPS:
+        env_files = {
+            path.name.lower(): path
+            for directory in dirs
+            for path in directory.glob("%s*.dll" % stem)
+        }
+        packaged = [
+            path
+            for path in package_dir.rglob("*")
+            if path.is_file() and path.name.lower().startswith(stem)
+            and path.name.lower().endswith(".dll")
+        ]
+        if not packaged:
+            continue
+        for path in packaged:
+            wanted = env_files.get(path.name.lower())
+            if wanted is not None:
+                if path.read_bytes() != wanted.read_bytes():
+                    shutil.copyfile(wanted, path)
+                    aligned.append(path.name)
+            else:
+                # 环境里没有这个文件名（例如 icudt78 对 icudt73）：留着只会被优先加载
+                path.unlink()
+                aligned.append("-%s" % path.name)
+    return aligned
+
+
+def verify_frozen_app(package_dir: Path, *, timeout: int = 120) -> tuple[bool, str]:
+    """在**干净环境**里跑一次冻包自检 —— 这是唯一能挡住"构建成功但双击起不来"的检查。
+
+    清掉 PATH（只留 System32）是刻意的：本机的 conda / 代理运行时会带一堆同名 DLL，
+    不清干净就会"在我这儿能跑、用户那儿报 DLL load failed"。
+    """
+
+    exe = package_dir / "LittleTilesReader" / "LittleTilesReader.exe"
+    if not exe.is_file():
+        return False, "找不到应用本体：%s" % exe
+    env = {
+        "SystemRoot": os.environ.get("SystemRoot", r"C:\Windows"),
+        "windir": os.environ.get("windir", r"C:\Windows"),
+        "TEMP": os.environ.get("TEMP", r"C:\Windows\Temp"),
+        "TMP": os.environ.get("TMP", r"C:\Windows\Temp"),
+        "PATH": os.pathsep.join([
+            os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "system32"),
+            os.environ.get("SystemRoot", r"C:\Windows"),
+        ]),
+    }
+    with tempfile.TemporaryDirectory(prefix="ltr-frozen-check-") as home:
+        env["LTR_HOME"] = home
+        process = subprocess.Popen(
+            [str(exe), "--self-check"],
+            cwd=str(package_dir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        try:
+            out, err = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            return False, "自检超时（多半弹了报错对话框卡住）"
+    text = (out or "") + (err or "")
+    if process.returncode == 0 and "全部通过" in text:
+        return True, "冻包自检通过（干净环境）"
+    tail = "\n".join(line for line in text.strip().splitlines()[-6:])
+    return False, "自检没通过（退出码 %s）：\n%s" % (process.returncode, tail)
+
+
+def unify_msvc_runtime(package_dir: Path) -> list[str]:
+    """把包里重复的 MSVC 运行时统一成同一份（优先用系统的，它向后兼容且更新）。"""
+
+    system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    unified: list[str] = []
+    for name in MSVC_RUNTIME_NAMES:
+        copies = [p for p in package_dir.rglob("*") if p.name.lower() == name]
+        if not copies:
+            continue
+        system_copy = system32 / name
+        if system_copy.is_file():
+            source = system_copy
+        else:
+            source = max(copies, key=lambda p: p.stat().st_size)
+        for copy in copies:
+            if copy.samefile(source):
+                continue
+            shutil.copyfile(source, copy)
+        unified.append(name)
+    return unified
 
 
 def platform_tag() -> str:
@@ -496,6 +701,8 @@ def main() -> int:
     parser.add_argument("--no-zip", action="store_true", help="只出目录，不压缩")
     parser.add_argument("--no-dmg", action="store_true",
                         help="macOS 上不出 DMG（默认出；DMG 才是用户习惯的那个安装包）")
+    parser.add_argument("--no-msi", action="store_true",
+                        help="Windows 上不出 MSI（默认出；双击就装的那个安装包）")
     parser.add_argument("--keep-buildinfo", action="store_true",
                         help="保留生成的 app/_buildinfo.py（默认保留；此开关只为显式表达）")
     args = parser.parse_args()
@@ -510,7 +717,9 @@ def main() -> int:
     name = "LittleTilesReader"
     command = pyinstaller_command(name, args.with_reader)
     print("开始构建：\n  " + " ".join(command))
-    code = subprocess.call(command)
+    # PATH 必须清过：本机 PATH 里有代理/别的运行时带的同名 DLL（实测是 ICU 78），
+    # PyInstaller 顺着 PATH 分析依赖会收错版本，包能构建、双击起不来
+    code = subprocess.call(command, env=clean_build_env())
     if code != 0:
         return code
 
@@ -540,6 +749,23 @@ def main() -> int:
         # 未签名发布：至少给出 ad-hoc 签名，否则 arm64 上会被 Gatekeeper 直接杀掉
         sign_macos(target)
         print("已做 ad-hoc 签名（安装说明见 README-unsigned.md）")
+    if sys.platform.startswith("win"):
+        # 见 MSVC_RUNTIME_NAMES 的注释：两份不同版本的 MSVC 运行时会让人以为
+        # "构建成功但双击起不来"，必须在这里统一掉（zip 与 MSI 都用这份目录）
+        unified = unify_msvc_runtime(target)
+        if unified:
+            print("已统一 MSVC 运行时（%s），避免包里两份不同版本导致 Qt 加载失败"
+                  % "、".join(unified))
+        aligned = align_runtime_dependencies(target)
+        if aligned:
+            print("已把运行时依赖对齐到构建环境：%s" % "、".join(sorted(set(aligned))))
+        # 最后一道：在干净环境里真跑一次冻包自检。不过就直接判构建失败——
+        # "构建成功但双击报 DLL load failed" 这种事不能靠运气发现（真机上就是这么撞的）。
+        ok, note = verify_frozen_app(target)
+        print("%s 冻包自检：%s" % ("[OK]" if ok else "[FAIL]", note))
+        if not ok:
+            print("构建产物不可用，已中止（不出 zip / MSI）")
+            return 1
 
     total = payload_size(target)
     print("产物目录：%s（%s）" % (target, human(total)))
@@ -548,11 +774,25 @@ def main() -> int:
         if image is not None and image.is_file():
             print("安装包（DMG）：%s（%s）" % (image, human(image.stat().st_size)))
             print("SHA-256：%s" % sha256(image))
+    if sys.platform.startswith("win") and not args.no_msi:
+        # MSI 只能在这台机器上生成（要 Windows + msilib），所以放在这里而不是别处
+        from build_msi import make_msi, sha256 as msi_sha256, verify_msi  # noqa: PLC0415
+
+        installer = target.parent / (target.name + ".msi")
+        make_msi(
+            target, installer, version=__version__,
+            icon=ROOT / "packaging" / "app.ico",
+        )
+        print("SHA-256：%s" % msi_sha256(installer))
+        # 出包后立刻解包核对一遍（不需要管理员权限，也不会写注册表）
+        with tempfile.TemporaryDirectory(prefix="ltr-msi-") as tmp:
+            ok, note = verify_msi(installer, target, Path(tmp) / "extract")
+        print("%s MSI 解包自检：%s" % ("[OK]" if ok else "[FAIL]", note))
     if not args.no_zip:
         archive = zip_dir(target)
         print("压缩包：%s（%s）" % (archive, human(archive.stat().st_size)))
         print("SHA-256：%s" % sha256(archive))
-    print("发布：macOS 传 DMG（用户双击挂载那个），zip 作为通用/备用；")
+    print("发布：macOS 传 DMG（用户双击挂载那个），Windows 传 MSI（双击就装），zip 作为通用/备用；")
     print("      把下载直链 + SHA-256 填进后台「LT 读取器 → 客户端下载」即可。")
     return 0
 

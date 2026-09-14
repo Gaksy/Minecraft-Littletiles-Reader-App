@@ -21,6 +21,23 @@ import sys
 
 from .config import bundle_root
 
+
+def _force_utf8() -> None:
+    """自检的输出里有中文；被重定向成管道时 Windows 会退回 locale 编码（cp1252）直接崩。
+
+    打包机上的"清空环境变量跑自检"就是这么炸的（`UnicodeEncodeError`），
+    而不是自检内容有问题。这里兜一层，编不出来的字符降级成替代符。
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
 #: 运行时必须能 import 的 ltgen 子模块（tools/*.py 里用到的都在这里）。
 LIBRARY_MODULES = (
     "ltgen",
@@ -99,6 +116,7 @@ CHECKS = (
 def run() -> int:
     """跑完所有检查，逐条打印；全过返回 0。"""
 
+    _force_utf8()
     print("LittleTiles Reader 自检（frozen=%s）" % getattr(sys, "frozen", False))
     print("解包目录：%s" % bundle_root())
     failed = 0

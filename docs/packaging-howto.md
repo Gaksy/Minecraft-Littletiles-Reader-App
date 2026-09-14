@@ -124,6 +124,17 @@ dir build-release\Release\nbt++.dll
 # 期望打印两行：LittleTiles Reader x.y.z（...） 与 x.y.z
 ```
 
+> 这台机器上实际跑通的是 **Ninja + 本机 vcpkg**（`D:\Development\DevLib\CorCpp\vcpkg`）：
+> ```powershell
+> cmake -S . -B build-release -G Ninja `
+>       -DCMAKE_MAKE_PROGRAM="A:/Application/CLion 2025.2.5/bin/ninja/win/x64/ninja.exe" `
+>       -DCMAKE_BUILD_TYPE=Release `
+>       -DCMAKE_TOOLCHAIN_FILE=D:/Development/DevLib/CorCpp/vcpkg/scripts/buildsystems/vcpkg.cmake
+> cmake --build build-release
+> # 产物在 build-release\ 根目录（Ninja 不建 Release 子目录）
+> ```
+> 首次配置要联网（CMake 会 FetchContent 拉 `libnbtplusplus`）。
+
 ---
 
 ## 3. 打包应用
@@ -136,6 +147,12 @@ python tools/build_app.py --with-reader --reader ../minecraft-littletiles-reader
 
 # Windows（含库；--reader 指向 Release 目录里的 exe）
 python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader\build-release\Release\LittleTilesReader.exe
+
+# 只出目录、不压缩不装包（调试）
+python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader\build-release\LittleTilesReader.exe --no-zip --no-msi
+
+# 单独出 MSI（比如已经有了目录，只想重打包）
+python tools\build_msi.py dist\app\LittleTilesReader-0.1.0-windows-x64 --check
 ```
 
 脚本会依次做这些事（每一步都会打印）：
@@ -155,7 +172,45 @@ python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader
 7. 做一次 ad-hoc 签名（macOS，改过 Mach-O 之后必须重签，否则 arm64 上直接被杀）；
 8. **打 DMG**（macOS，`hdiutil`）——这才是 macOS 用户习惯的"安装包"，见下方
    "DMG 里只有一个 .app"；
-9. 打 zip（macOS 用 `ditto`）并打印两个 **SHA-256**（DMG 与 zip 各一个）。
+9. **打 MSI**（Windows，`tools/build_msi.py`）——双击就装、能在"应用和功能"里卸载，
+   见下方"Windows 的安装包（MSI）"；出完立刻用它自己的解包自检核对一遍文件数；
+10. 打 zip（macOS 用 `ditto`）并打印各产物的 **SHA-256**（DMG / MSI / zip）。
+
+### Windows 的安装包（MSI）
+
+`tools/build_msi.py` 用 **Python 自带的 `msilib`** 直接建 MSI（不再依赖 WiX）：
+一次跑完"建表 → 把文件塞进 cab → 写快捷方式 → 设升级码"，然后可选地跑解包自检。
+
+形态与几个决定：
+
+* **每机器安装**（`ALLUSERS=1`）→ 装到 `C:\Program Files\LittleTilesReader`，
+  双击会有一次 UAC；"应用和功能"里能看到、能卸载。这是 MSI 的常规形态。
+* 装到 Program Files 正好落在应用**已经照顾过**的情形：安装目录不可写时
+  `app/config.py:data_dir()` 会把 config/logs/outputs/素材 放到
+  `%LOCALAPPDATA%\LittleTilesReader`，并在首次启动提示一句。
+* 开始菜单多一个「LittleTiles Reader」文件夹（内含快捷方式），桌面也放一个。
+* **固定 UpgradeCode + 每版本一个 ProductCode**：以后发新版时，装新版会先卸掉旧版
+  （`RemoveExistingProducts` 排在 `InstallValidate` 与 `InstallInitialize` 之间）。
+* 图标进 `Icon` 表供"应用和功能"显示（`packaging/app.ico`）。
+
+自检（不需要管理员权限，也不写注册表）：
+
+```powershell
+python tools\build_msi.py dist\app\LittleTilesReader-<版本>-windows-x64 --check
+# 期望：[OK] 解包自检：244 个文件全部就位、大小一致
+```
+
+它跑的是 `msiexec /a`（管理员安装 = 只解包）：能验证表结构合法、cab 可读、
+每个文件的相对路径与大小都对得上（解包根会额外多一份 MSI 自己，属正常）。
+
+> **需要管理员权限的那一步（真正装一遍）我这边跑不了**：沙箱里的进程是过滤令牌
+> （管理员组是 deny-only、完整性 Medium），`msiexec /i` 会返回 1925。
+> 所以"双击 → UAC → 装完打开 → 卸载"这一串请在有管理员权限的终端里自己走一遍。
+> 卸载：`msiexec /x dist\app\LittleTilesReader-<版本>-windows-x64.msi /qn`
+> 或直接在"应用和功能"里点卸载。
+
+⚠️ `msilib` 在 **Python 3.13 被移除**。本仓库的构建环境是 3.11；换解释器时要
+用 3.12 及以下打包，或把这一层换成 WiX（产物形态不变）。
 
 ### 为什么会有"显式收集运行时模块"这一步
 
@@ -259,7 +314,8 @@ dist/app/LittleTilesReader-<版本>-<平台>/
 ├── 安装说明.txt                    # packaging/install-note.txt（给用户的说明）
 └── （首次运行后自动生成）config/ logs/ outputs/ tmp/
 dist/app/LittleTilesReader-<版本>-macos-arm64.dmg   ← macOS 用户下载这个（双击挂载）
-dist/app/LittleTilesReader-<版本>-<平台>.zip        ← 通用/备用，Windows 只有这个
+dist/app/LittleTilesReader-<版本>-windows-x64.msi   ← Windows 用户下载这个（双击安装）
+dist/app/LittleTilesReader-<版本>-<平台>.zip        ← 通用/备用（Windows 上=免安装便携版）
 ```
 
 macOS 的 `.app` 里面（用户不用关心，但排障时要看）：
@@ -433,6 +489,9 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 | 解压出来的 `.app` 打不开、提示"已损坏" | zip 没用 `ditto` 打：zipfile 把软链展开成实体文件，签名就废了。重打一次（脚本已在 macOS 上走 `ditto`） |
 | 界面能开，但导出报"找不到 LittleTilesReader" | 第 2 步没编库 / `--with-reader` 没加。macOS 上 CLI 应在 `.app/Contents/Frameworks/reader/`，Windows 上在包根；用 `--self-check` 一看就知道找没找到 |
 | 中文变方框 | 字体没随包：确认 `app/resources/fonts/` 在 `_internal` 里（`--add-data` 已包含） |
+| 双击/`--self-check` 报 `ImportError: DLL load failed while importing QtWidgets: The specified procedure could not be found` | 包里的 **ICU** 盖住了系统那份：conda 的 PySide6 是按"Windows 自带 ICU 的无版本符号"（`ucnv_open`）编的，而 conda/代理运行时里的 icuuc 导出的是带版本后缀的（`ucnv_open_73` / `_78`）——PyInstaller 顺着 PATH 把后者打进了包。现在 `build_app.py` 会把 `icu*.dll` 一律删掉（`NEVER_BUNDLE_STEMS`），并**在干净环境里跑一次冻包自检**，通不过直接判构建失败 |
+| 同上，但包是在**别的机器**上打的 | 打包机的 PATH 里可能有别家运行时带的同名 DLL（实测：Codex 运行时自带 poppler，里面是 ICU 78）。`clean_build_env()` 会把这类目录从 PyInstaller 的 PATH 里剔掉 |
+| `--self-check` 报 `UnicodeEncodeError: 'charmap' codec ...` | 自检输出有中文、被重定向成管道时 Windows 退回 locale 编码。`app/selfcheck.py` 现在开头就把 stdout/stderr 切到 UTF-8（`errors="replace"`） |
 | 双击没反应（macOS） | 未签名被拦，照 `README-unsigned.md`；或直接跑 `.app/Contents/MacOS/LittleTilesReader` 看终端输出（**最快的排查手段**） |
 | 导出产物找不到 | 数据目录就在应用文件夹（首次运行后出现 `outputs/`）；也看「关于」与日志里写的路径 |
 | 想知道包多大 | 真机实测（macOS ARM，形态 B）：目录 **113 MB**、zip **39.6 MB**；明显更大先看有没有把裸 onedir 也发了（应该只有 `.app`），再查 `EXCLUDES` |
@@ -450,9 +509,13 @@ cd ../minecraft-littletiles-reader-app && python tools/build_app.py --with-reade
 ```
 
 ```powershell
-# Windows（x64）
-cd ..\minecraft-littletiles-reader; cmake -S . -B build-release -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"; cmake --build build-release --config Release
-cd ..\minecraft-littletiles-reader-app; python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader\build-release\Release\LittleTilesReader.exe
+# Windows（x64）——本机实测用的是 Ninja + 本机 vcpkg（见第 2 节）
+cd ..\minecraft-littletiles-reader
+cmake -S . -B build-release -G Ninja -DCMAKE_MAKE_PROGRAM="A:/Application/CLion 2025.2.5/bin/ninja/win/x64/ninja.exe" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=D:/Development/DevLib/CorCpp/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build-release
+cd ..\minecraft-littletiles-reader-app
+python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader\build-release\LittleTilesReader.exe
+# 产出：目录 + zip + MSI 三个（MSI 自带解包自检）
 ```
 
 ---
@@ -489,3 +552,15 @@ python tests/test_<名字>.py     # 或按 §2 的清单逐个跑
 ```
 
 第 ①②条能挡住第 1（部分）、3、4、5 类；**第 2 类只有 ③ 能挡**（依赖是在启动时才解析的）。
+
+Windows 的安装包还要单独过这两条（`msilib` 的坑都在这里）：
+
+```powershell
+# ④ MSI 解包自检（不需要管理员）：表结构 + cab + 每个文件的相对路径/大小
+python tools\build_msi.py dist\app\LittleTilesReader-<版本>-windows-x64 --check
+
+# ⑤ 真机装一遍（要有管理员权限，会弹 UAC）：
+#    双击 MSI → 装到 C:\Program Files\LittleTilesReader → 打开应用
+#    → 确认数据落在 %LOCALAPPDATA%\LittleTilesReader（Program Files 不可写，应用会自己退过去）
+#    → 从"应用和功能"卸载 → 确认目录、开始菜单与桌面快捷方式都没了
+```
