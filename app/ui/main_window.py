@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ltgen import paths
 from ltgen.lint import lint_package
 
 from .. import appdata, i18n

@@ -55,7 +55,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ltgen import paths
 
 from .. import i18n
 from ..applog import logger
@@ -2318,9 +2317,21 @@ class ProjectWindow(QMainWindow):
 
 
 def _cli_path(config: AppConfig) -> Path:
-    if config.library_cli:
-        return Path(config.library_cli)
-    return paths.reader_executable()
+    """项目模式的 CLI 定位——**必须**和主界面走同一套（`app/reader.py`）。
+
+    别再直接 `ltgen.paths.reader_executable()`：那个函数是拿 `__file__` 反推仓库根的
+    （`PROJECT_ROOT.parent / "minecraft-littletiles-reader"`）。打包后 `ltgen` 在冻结包
+    里，`__file__` 落在 `.app/Contents/Frameworks/ltgen/paths.py`，于是"库仓库"被算成
+    `.app/Contents/minecraft-littletiles-reader`，最后拼出
+    `…/LittleTilesReader.app/Contents/minecraft-littletiles-reader/cmake-build-debug/LittleTilesReader`
+    这种根本不存在的路径 —— 真机上项目导出就卡在这。
+    `reader.locate()` 的顺序是「配置 → 应用旁边（打包版）→ 仓库构建产物」，
+    打包版在第二步就命中了。
+    """
+
+    from ..reader import locate
+
+    return locate(config.library_cli or None)
 
 
 def _relative(path: Path, root: Path) -> str:

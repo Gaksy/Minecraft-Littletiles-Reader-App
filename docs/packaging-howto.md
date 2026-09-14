@@ -338,6 +338,7 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 
 | 现象 | 原因 / 处理 |
 |---|---|
+| 导出报"找不到 LittleTilesReader"，而路径里出现 `…/LittleTilesReader.app/Contents/minecraft-littletiles-reader/…` | 有代码绕过 `app/reader.py` 直接用了 `ltgen.paths.reader_executable()`。它是拿 `__file__` 反推仓库根的（`PROJECT_ROOT.parent / "minecraft-littletiles-reader"`），冻结后 `__file__` 在 `.app` 里，于是"库仓库"被算成 `.app/Contents/minecraft-littletiles-reader`。**定位 CLI 一律走 `reader.locate()`**（顺序：配置 → 应用旁边 → 仓库构建产物）。回归用例：`tests/test_reader_locate.py` |
 | 打包版点「导入素材 / 重新组合素材」报 `No module named ltgen.xxx` | 漏收集：`tools/*.py` 是运行时按路径加载的，静态分析看不到它们的 import。`tools/build_app.py` 现在用 `--collect-submodules ltgen` + `tool_hidden_imports()` 扫 `app/generators.py::TOOL_NAMES` 里那几个脚本的依赖。**加新工具脚本就同步 TOOL_NAMES**，然后跑 `--self-check` 复验 |
 | 启动就退、日志里 `ImportError: attempted relative import with no known parent package` | 入口被改回 `app/__main__.py` 了。入口必须是 `packaging/entry.py`（见上一节） |
 | 启动就退、日志里 `ModuleNotFoundError` | PyInstaller 没收集到某个模块：把它加进 `--hidden-import`（改 `tools/build_app.py` 的 `command`），或先在本机 `python -m app` 跑一遍确认不是代码问题 |
