@@ -108,8 +108,37 @@
 
 - [x] 读完网站/组件库的设计令牌，形成 §2
 - [x] 应用仓库结构摸清（PySide6 + `app/ui/*`，现有 `theme.py` 只按系统调色板取语义色）
-- [ ] conda 安装与环境
-- [ ] 设计系统（tokens/fonts/qss/components）
-- [ ] 界面改造
-- [ ] 测试（含三个真实存档）
-- [ ] P0 功能
+- [x] conda 安装与环境（Miniforge3 → `~/miniforge3`，环境 `minecraft-littletiles-reader`＝Python 3.11.16 + PySide6 6.11.2）
+- [x] 库仓库补依赖并重建（boost-json 装进 vcpkg；`--job` 才生效）
+- [x] 素材包重建（`data/assets/{1.12.2,pack_v14,pack_snbt}`，ltgen lint 2/2 通过）
+- [x] 设计系统（`app/ui/design/`：tokens/fonts/qss/components/theme）+ `docs/design-system.md`
+- [x] 界面改造（主界面 / 项目界面 / 导出对话框 / 素材管理 / 项目卡片 / 区块格子 / 容量条；主题切换）
+- [x] 测试：原有 13 个脚本全部通过 + 新增 `test_real_saves.py`（base/escalator/subway 端到端）
+- [x] P0-1 素材自定义命名 + 选中查看内容（`app/materials.py`，`test_materials.py`）
+- [x] P0-2 默认输出目录管理（菜单 + `test_output_dir.py`）
+- [x] P0-3 快速导出粘贴 SNBT（`app/ui/snbt_source.py` + `test_snbt_paste.py`）
+- [x] P1-4 打包分发：形态 B（库 + 客户端一个包、同目录、开箱即用）、macOS ARM、不签名、
+      附带自签名说明 + 首次启动许可协议。**真机（macOS 26.6.2 / arm64）已跑通**：
+      `dist/app/LittleTilesReader-0.1.0-macos-arm64.zip`（39.6 MB，目录 113.2 MB），
+      解压后 `env -i` 隔离环境真实导出 base 存档成功（236 tiles / 12975 顶点 / 4940 面）
+- [ ] P1-5 贴图"需求指纹"缓存（需要用户拍板是否改库）
+- [ ] P2 封面缩略图缓存 / rar 解压兜底 / 素材管理显示"被哪些项目绑定"
+
+## 6. 需要用户回答的三件事（醒来后）
+
+1. 打包目标形态：onedir zip？应用名/图标？只 Windows 还是也要 macOS？
+2. 快速导出粘贴的 SNBT 落哪个目录？——**我暂时选定：应用的 `tmp/`**
+   （`tmp/<时间戳>_paste.txt`，与 job 临时文件同处，随时可删）
+3. 贴图缓存要不要动库（改 `MaterialManager`）？不动只是每次重烘、慢一点
+
+## 7. 环境变量（跑测试/脚本要用）
+
+```sh
+export LTR_DATA_ROOT=/Users/external_elliott/DevelopmentTestFolder/MinecraftLittleTIlesReader/data
+export LTR_LIBRARY=/Users/external_elliott/Development/minecraft-littletiles-reader
+export LTR_VANILLA_JAR=/Users/external_elliott/DevelopmentTestFolder/MinecraftLittleTIlesReader/InceptionGN/.minecraft/versions/1.12.2/1.12.2.jar
+export QT_QPA_PLATFORM=offscreen PYTHONUTF8=1
+PY=$HOME/miniforge3/envs/minecraft-littletiles-reader/bin/python
+```
+
+`$PY -m app` 启动应用；`$PY tests/test_<名字>.py` 跑单个自检。

@@ -41,6 +41,11 @@ from app import __version__                                    # noqa: E402
 
 DIST = ROOT / "dist" / "app"
 BUILD = ROOT / "build" / "app"
+#: PyInstaller 自己的输出目录（**不直接发**）。macOS 上它会同时产出两份内容：
+#: `LittleTilesReader.app`（自包含，用户双击的就是它）和 `LittleTilesReader/`
+#: （裸 onedir，`.app` 就是从这份内容拼出来的）。两份一起发 = Qt 打两遍、体积翻倍，
+#: 所以先落到这里，下面只挑一份搬进最终目录。
+SCRATCH = BUILD / "dist"
 
 #: 这些 Qt 模块用不到，但体积巨大（QtWebEngine 一个就 598 MB；QtMultimedia 还带 ffmpeg）。
 #: 应用只 import QtCore / QtGui / QtWidgets（全仓 grep 确认过）。
@@ -114,12 +119,18 @@ def pyinstaller_command(name: str, with_reader: bool) -> list[str]:
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean", "--windowed", "--onedir",
         "--name", name,
-        "--distpath", str(DIST),
+        "--distpath", str(SCRATCH),
         "--workpath", str(BUILD),
         "--specpath", str(BUILD),
     ]
+    if sys.platform == "darwin":
+        command += ["--osx-bundle-identifier", "work.inception.littletiles-reader"]
     for relative, target in DATA:
-        command += ["--add-data", "%s%s%s" % (relative, ";" if sys.platform.startswith("win") else ":", target)]
+        # 源路径必须写绝对路径：--specpath 指向 build/，相对路径会被当成
+        # 相对 build/ 解析（`app/resources` → `build/app/app/resources`，直接报找不到）。
+        source = ROOT / relative
+        separator = ";" if sys.platform.startswith("win") else ":"
+        command += ["--add-data", "%s%s%s" % (source, separator, target)]
     for module in EXCLUDES:
         command += ["--exclude-module", module]
     icon = ROOT / "packaging" / ("app.ico" if sys.platform.startswith("win") else "app.icns")
@@ -127,7 +138,9 @@ def pyinstaller_command(name: str, with_reader: bool) -> list[str]:
         command += ["--icon", str(icon)]
     else:
         print("提示：没有 %s，这次不带图标（见 packaging/README.md）" % icon.relative_to(ROOT))
-    command += [str(ROOT / "app" / "__main__.py")]
+    # 入口用 packaging/entry.py 而不是 app/__main__.py：后者是给 `python -m app`
+    # 用的、通篇相对导入，被 PyInstaller 当脚本跑时会 ImportError（见该文件注释）。
+    command += [str(ROOT / "packaging" / "entry.py")]
     if with_reader:
         print("形态 B：会把 LittleTilesReader 一起打进包 —— **整包按 GPL-3.0-or-later**（docs/licenses.md）")
     return command
@@ -151,11 +164,144 @@ def copy_reader(target_dir: Path, explicit: str | None = None) -> None:
             "先在库仓库构建一次（见 docs/packaging-howto.md 的第 2 步），"
             "或显式指定 --reader <路径>" % executable
         )
-    shutil.copy2(executable, target_dir / executable.name)
-    # macOS 上动态库要跟着走（Windows 那边 CMake 会把 nbt++.dll 放到 exe 旁边）
-    for lib in executable.parent.glob("*.dylib"):
-        shutil.copy2(lib, target_dir / lib.name)
+    destination = target_dir / executable.name
+    shutil.copy2(executable, destination)
     print("已放入 reader：%s" % executable.name)
+    if sys.platform == "darwin":
+        relocate_macos_libraries(destination, target_dir)
+    else:
+        # Windows：CMake 会把 nbt++.dll 放在 exe 旁边（或 vcpkg 的 bin 里），一起拷走
+        for lib in executable.parent.glob("*.dll"):
+            shutil.copy2(lib, target_dir / lib.name)
+
+
+#: 系统自带的库不用跟着走（用户机器上一定有）。
+SYSTEM_LIBRARY_PREFIXES = ("/usr/lib/", "/System/", "/Library/Apple/")
+
+
+def otool_lines(executable: Path, flag: str) -> list[str]:
+    """跑 `otool <flag>` 并把输出按行返回（没装 otool 时返回空表）。"""
+
+    done = subprocess.run(
+        ["otool", flag, str(executable)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    return (done.stdout or "").splitlines()
+
+
+def macho_dependencies(executable: Path) -> list[str]:
+    """`otool -L` 里的非系统依赖（含 `@rpath/...` 这种相对写法）。"""
+
+    found: list[str] = []
+    for line in otool_lines(executable, "-L")[1:]:
+        name = line.strip().split(" (compatibility version")[0].strip()
+        if not name or name.startswith(SYSTEM_LIBRARY_PREFIXES):
+            continue
+        found.append(name)
+    return found
+
+
+def macho_rpaths(executable: Path) -> list[str]:
+    """`otool -l` 里的 LC_RPATH 列表（库构建产物里通常写的是本机绝对路径）。"""
+
+    paths: list[str] = []
+    expect_path = False
+    for line in otool_lines(executable, "-l"):
+        stripped = line.strip()
+        if stripped == "cmd LC_RPATH":
+            expect_path = True
+            continue
+        if expect_path and stripped.startswith("path "):
+            paths.append(stripped[5:].split(" (offset")[0].strip())
+            expect_path = False
+    return paths
+
+
+def resolve_dependency(name: str, executable: Path) -> Path | None:
+    """把 `otool -L` 里的名字解析成真实文件。
+
+    `@rpath/libnbt++.dylib` 这种要拿 LC_RPATH 去凑（本机构建时那是源码树里的
+    `_deps/libnbtplusplus-build`，别人机器上不存在——所以必须重写成
+    `@executable_path/...` 才能随包分发）。
+    """
+
+    bases: list[Path] = []
+    if name.startswith(("@rpath/", "@loader_path/", "@executable_path/")):
+        leaf = name.split("/", 1)[1]
+        bases = [Path(base) / leaf for base in macho_rpaths(executable)]
+        bases += [
+            executable.parent / leaf,
+            executable.parent / "lib" / leaf,
+            executable.parent / "_deps" / "libnbtplusplus-build" / leaf,
+            executable.parent.parent / "lib" / leaf,
+        ]
+    else:
+        bases = [Path(name)]
+    for candidate in bases:
+        try:
+            if candidate.is_file():
+                return candidate.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def relocate_macos_libraries(executable: Path, target_dir: Path) -> None:
+    """把 CLI 的动态库依赖搬到包根，并把安装名改写成 `@executable_path/...`。
+
+    不改的话，那个绝对 rpath（指向本机的构建目录）在用户机器上不存在，
+    一运行就是 `Library not loaded: @rpath/libnbt++.dylib`。
+    """
+
+    moved: list[str] = []
+    for name in macho_dependencies(executable):
+        source = resolve_dependency(name, executable)
+        if source is None:
+            print("警告：找不到这个依赖，先跳过：%s" % name)
+            continue
+        destination = target_dir / source.name
+        if not destination.is_file():
+            shutil.copy2(source, destination)
+        relative = "@executable_path/%s" % source.name
+        # 库自己要知道"我被谁引用"（install id），可执行文件要知道去哪找
+        subprocess.run(["install_name_tool", "-id", relative, str(destination)], check=False)
+        subprocess.run(["install_name_tool", "-change", name, relative, str(executable)], check=False)
+        moved.append("%s → %s" % (name, relative))
+
+    if moved:
+        existing = macho_rpaths(executable)
+        if not any(path.startswith("@executable_path") for path in existing):
+            subprocess.run(["install_name_tool", "-add_rpath", "@executable_path", str(executable)],
+                           check=False)
+        # 依赖已经改成 @executable_path/...，那些指向本机构建目录的 rpath 留着只会碍事
+        for path in existing:
+            if not path.startswith("@executable_path"):
+                subprocess.run(["install_name_tool", "-delete_rpath", path, str(executable)],
+                               check=False)
+        # arm64 上改过 Mach-O 会作废原来的签名，必须重新做一次 ad-hoc 签名，
+        # 否则用户机器上直接 "code signature invalid" 被杀。
+        sign_macos(target_dir)
+        for line in moved:
+            print("已随包：%s" % line)
+
+
+def sign_macos(target_dir: Path) -> None:
+    """对包里的可执行文件做 ad-hoc 签名（未签名发布版的前提，见 packaging/README-unsigned.md）。"""
+
+    if sys.platform != "darwin":
+        return
+    for item in sorted(target_dir.rglob("*")):
+        if not item.is_file():
+            continue
+        if item.suffix == ".dylib" or item.name.startswith("LittleTilesReader"):
+            if item.name.endswith(".app"):
+                continue
+            subprocess.run(["codesign", "--force", "--sign", "-", str(item)], check=False,
+                           capture_output=True)
+    app = next(iter(target_dir.glob("*.app")), None)
+    if app is not None:
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)],
+                       check=False, capture_output=True)
 
 
 def copy_docs(target_dir: Path, with_reader: bool = False) -> None:
@@ -182,12 +328,48 @@ def copy_docs(target_dir: Path, with_reader: bool = False) -> None:
 
 
 def zip_dir(folder: Path) -> Path:
-    archive = folder.with_suffix(".zip")
+    # 注意别用 with_suffix：`LittleTilesReader-0.1.0-macos-arm64` 会被当成
+    # "名字 .0-macos-arm64 后缀"，直接砍成 `LittleTilesReader-0.1.zip`。
+    archive = folder.parent / (folder.name + ".zip")
+    if archive.exists():
+        archive.unlink()
+    if sys.platform == "darwin":
+        # 必须用 ditto：Python 的 zipfile 不认软链，会把 `.app` 里
+        # Frameworks/Resources 之间的软链**展开成实体文件**——zip 体积翻倍，
+        # 解压出来的 .app 签名也对不上（Gatekeeper 直接判损坏）。
+        subprocess.run(
+            ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(folder), str(archive)],
+            check=True,
+        )
+        return archive
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for item in sorted(folder.rglob("*")):
             if item.is_file():
                 bundle.write(item, item.relative_to(folder.parent))
     return archive
+
+
+def payload_size(folder: Path) -> int:
+    """算真实占盘（软链按软链算，别跟着软链把同一个文件重复计一遍）。"""
+
+    total = 0
+    for item in folder.rglob("*"):
+        try:
+            total += item.lstat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def write_bundle_version(app: Path) -> None:
+    """把 Info.plist 里的版本号写成真实版本（PyInstaller 默认 0.0.0）。"""
+
+    plist = app / "Contents" / "Info.plist"
+    if not plist.is_file():
+        return
+    for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+        subprocess.run(["plutil", "-replace", key, "-string", __version__, str(plist)], check=False)
+    print("Info.plist 版本号已写成 %s" % __version__)
 
 
 def sha256(path: Path) -> str:
@@ -227,21 +409,30 @@ def main() -> int:
     if code != 0:
         return code
 
-    # 产物目录：<dist>/<name>；再包一层"带版本与平台"的名字，方便上传到发布页
-    built = DIST / name
-    if not built.is_dir():
-        print("构建结束但没找到产物目录：%s" % built)
+    # 挑一份发：macOS 上用 .app（自包含），其他平台用 onedir
+    app_bundle = SCRATCH / ("%s.app" % name)
+    built = app_bundle if (sys.platform == "darwin" and app_bundle.is_dir()) else SCRATCH / name
+    if not built.exists():
+        print("构建结束但没找到产物：%s" % built)
         return 1
     target = DIST / ("%s-%s-%s" % (name, __version__, platform_tag()))
     if target.exists():
         shutil.rmtree(target)
-    built.rename(target)
+    target.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(built), str(target / built.name))
+    if built is app_bundle:
+        print("已放入应用：%s（裸 onedir 是同一份内容的中间产物，不随包发）" % app_bundle.name)
+        write_bundle_version(target / app_bundle.name)
 
     if args.with_reader:
         copy_reader(target, args.reader)
     copy_docs(target, args.with_reader)
+    if sys.platform == "darwin":
+        # 未签名发布：至少给出 ad-hoc 签名，否则 arm64 上会被 Gatekeeper 直接杀掉
+        sign_macos(target)
+        print("已做 ad-hoc 签名（安装说明见 README-unsigned.md）")
 
-    total = sum(item.stat().st_size for item in target.rglob("*") if item.is_file())
+    total = payload_size(target)
     print("产物目录：%s（%s）" % (target, human(total)))
     if not args.no_zip:
         archive = zip_dir(target)
