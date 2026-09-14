@@ -1,12 +1,10 @@
 """导出存档：选存档 → 选区块 → 选项。
 
-版面：**左边一列输入（区块参数 + 选项），右边一张区块概览图**，把宽度用起来
-（以前是上下堆叠，图表挤在左下角一小块）。
+区块选择的三种模式由「区块选择说明」那张现画的示意图解释
+（**只是示例图，不是让用户在图上点选**——范围由输入框决定）。
 
-概览图默认"以有导出数据的区块为中心，向外各 5 格"——打开就能看到"哪些块导过、
-这次要导的框在哪儿"，而不是只有一个孤零零的坐标。图**只用来查看**：范围仍旧由
-输入框决定（图上点选会让人以为"点了就等于选了范围"）。图上悬停看坐标与状态，
-点一格在旁边看详情；范围大于视口时可以按住拖动平移，像看地图那样。
+对话框里右下角那张小网格画的是"这次要导的范围里，哪些块导过没有"（三态配色）；
+整个项目"导过哪些区块"的概览在项目界面上（`project_window._build_overview_box`）。
 
 不适用的输入框**置灰而不是隐藏**：隐藏会让那一行留个空洞，列也就对不齐；
 置灰则所有行始终在位，位置固定。
@@ -29,7 +27,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -51,13 +48,11 @@ from ..savefolder import inspect as inspect_save
 from .illustration_dialog import IllustrationDialog
 from . import design
 from .widgets import wrap
-from ..records import STATE_LABELS
-from .chunk_grid import ChunkMapView
+from .chunk_grid import NO_CELL, ChunkStateGrid
 
-# 概览图：格子小一点（22px 一屏能放很多），单边最多 96 格（再多就该靠滚动看了）
-GRID_CELL = 18
-GRID_MAX = 96
-OVERVIEW_RADIUS = 5        # 以"有数据的区块"为中心向外拓展几格
+# 这个对话框里只放得下一小块，格子画小一点、单边最多 16 格
+GRID_CELL = 12
+GRID_MAX = 16
 
 
 class ExportRegionDialog(QDialog):
@@ -75,7 +70,7 @@ class ExportRegionDialog(QDialog):
         show_help_on_open: bool = False,
         initial_save: str = "",
         state_provider: Callable[[str, str, list], dict] | None = None,
-        exported_provider: Callable[[str, str], list] | None = None,
+        save_locked: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("导出存档模型")
@@ -83,29 +78,19 @@ class ExportRegionDialog(QDialog):
         self._initial = dict(initial or {})
         # 项目模式要把"这个项目默认的存档"填进去，而不是全局最近用过的那个
         self._initial_save = initial_save
-        # 项目模式会把"这些区块导过没有"的数据源传进来（§6 的概览图）：
-        #   一次问一批格子（每格一回就是上百次文件系统查询，卡在打开对话框上）
+        # 项目模式会把"这个区块导过没有"的数据源传进来（§6 的预览网格）
         self._state_provider = state_provider
-        # 概览图的中心来自"这个存档里已经导过哪些区块"，由项目界面提供
-        self._exported_provider = exported_provider
+        # 项目模式：存档位置由项目配置决定，这里只显示、不让改（改的地方在「项目配置」）
+        self._save_locked = save_locked
         self._grid_key: tuple | None = None
-        self._grid_scope: tuple | None = None
-        self._cell_info: dict = {}
         self._build_ui()
-        self._reset_detail()
-        self.hover_label.setText(
-            i18n.tr("把鼠标停在格子上看这一块的坐标与状态。")
-        )
-        if self._state_provider is None:
-            self.grid_legend.setText(
-                i18n.tr(
-                    "黄框 = 本次范围（快速导出没有导出记录，不显示“导过没有”）"
-                )
-            )
         self._sync()
-        # 左列输入 + 右列概览图并排，宽度给足（概览图要能横向铺开）
-        self.resize(1080, 700)
-        self.setMinimumWidth(900)
+        # 像素字体比系统字体宽，列太窄会把右侧摘要截断；给一个下限宽度，
+        # 两列（左：区块参数 / 右：状态图 + 选项）才都放得下。
+        self.setMinimumWidth(820)
+        # 固定大小：所有行始终在位（不适用的只是置灰），内容高度是确定的，
+        # 没理由让用户拖出一个空一半的窗口。
+        self.layout().setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
         if show_help_on_open:
             self._show_help()
 
@@ -128,11 +113,20 @@ class ExportRegionDialog(QDialog):
         self.save_edit.setPlaceholderText("存档根目录（含 level.dat 的那个文件夹）")
         browse = QPushButton("选择文件夹")
         browse.clicked.connect(self._pick_save)
+        self.save_browse = browse
         save_row.addWidget(QLabel("存档"))
         save_row.addWidget(self.save_edit, 1)
         save_row.addWidget(browse)
         root.addLayout(save_row)
         self.save_edit.textChanged.connect(self._sync)
+        if self._save_locked:
+            # 项目模式：路径来自项目配置，要改去项目界面上的「项目配置」
+            self.save_edit.setEnabled(False)
+            browse.setVisible(False)
+            locked = QLabel("存档位置来自项目配置，要改请用项目界面上的「项目配置」。")
+            wrap(locked)
+            design.set_role(locked, "hint")
+            root.addWidget(locked)
 
         # 选完路径当场说清楚对不对：选错目录的表现是"导出 0 个区块"，
         # 只看结果很难反推是自己选错了一层
@@ -180,16 +174,43 @@ class ExportRegionDialog(QDialog):
         form.addRow("范围终点 x2", self.x2)
         form.addRow("范围终点 z2", self.z2)
 
-        # 左列：区块参数 + 导出选项（都是"输入"）
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(design.METRICS.gap_md)
         left_layout.addLayout(form)
+        # 项目模式下：这里画出"这几块导过没有"（灰/绿/黄），配一行图例
+        self.state_grid = ChunkStateGrid(cell=GRID_CELL, max_cells=GRID_MAX)
+        self.grid_legend = QLabel(
+            "灰 = 从未导出　绿 = 已导出且存档未变　黄 = 已导出但之后存档变过"
+        )
+        design.set_role(self.grid_legend, "hint")
+        if self._state_provider is None:
+            self.grid_legend.setText("（项目模式下这里会显示每个区块导出过没有）")
+            self.state_grid.setVisible(False)
+        left_layout.addSpacing(8)
+        left_layout.addWidget(self.state_grid)
+        left_layout.addWidget(self.grid_legend)
+        left_layout.addStretch(1)
+        body.addWidget(left)
 
+        # 右：示意图（静态） + 本次范围摘要
+        right_layout = QVBoxLayout()
+        self.help_button = QPushButton("区块选择说明")
+        self.help_button.clicked.connect(self._show_help)
+        right_layout.addWidget(self.help_button)
+
+        self.summary = QLabel()
+        wrap(self.summary)
+        design.set_role(self.summary, "hint")
+        # 摘要一行就是"共 N 个区块 x a…b z c…d"，窄了会被截断成半句
+        self.summary.setMinimumWidth(360)
+        right_layout.addWidget(self.summary)
+
+        # 选项放在右列：说明图搬去独立窗口之后，这里原本空着一大块。
         options_label = QLabel("选项")
         design.set_role(options_label, "hint")
-        left_layout.addWidget(options_label)
+        right_layout.addSpacing(8)
+        right_layout.addWidget(options_label)
 
         self.plain_blocks = QCheckBox("同时导出普通方块")
         self.plain_blocks.setChecked(bool(self._initial.get("plain_blocks", True)))
@@ -200,71 +221,10 @@ class ExportRegionDialog(QDialog):
         self.normalize = QCheckBox("再把最长边缩放到 1 个单位（会改变真实尺寸）")
         self.normalize.setChecked(bool(self._initial.get("normalize_scale", False)))
         for box in (self.plain_blocks, self.cull, self.center, self.normalize):
-            left_layout.addWidget(box)
+            right_layout.addWidget(box)
 
-        self.help_button = QPushButton("区块选择说明")
-        self.help_button.clicked.connect(self._show_help)
-        left_layout.addWidget(self.help_button)
-        left_layout.addStretch(1)
-        body.addWidget(left, 0)
-
-        # 右列：概览图 + 悬停信息 + 点击详情 + 本次摘要
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(design.METRICS.gap_sm)
-
-        head = QHBoxLayout()
-        self.grid_size_label = QLabel()
-        design.set_role(self.grid_size_label, "subtitle")
-        head.addWidget(self.grid_size_label)
-        self.grid_legend = QLabel(
-            "灰 = 从未导出　绿 = 已导出且存档未变　黄 = 已导出但之后存档变过　"
-            "黄框 = 本次范围"
-        )
-        design.set_role(self.grid_legend, "hint")
-        wrap(self.grid_legend)          # 德语/法语更长，不折行会被右边缘切掉
-        head.addWidget(self.grid_legend, 1)
-        right_layout.addLayout(head)
-
-        map_row = QHBoxLayout()
-        map_row.setSpacing(design.METRICS.gap_sm)
-        self.state_map = ChunkMapView(cell=GRID_CELL, max_cells=GRID_MAX)
-        self.state_map.hovered.connect(self._on_grid_hover)
-        self.state_map.clicked.connect(self._on_grid_clicked)
-        map_row.addWidget(self.state_map, 1)
-
-        # 点一格 → 详情出现在图的旁边（用卡片装：纯 QLabel 不会自己画底与描边）
-        detail_card, detail_layout = design.card(padding=design.METRICS.gap_sm)
-        detail_card.setFixedWidth(240)
-        self.detail = QLabel()
-        # 卡片宽度是固定的，所以这里不用 wrap()（那套 Ignored 策略是为了"随可用宽度
-        # 折行"，在这个定宽卡片里会让高度算错，正文被截掉几行）
-        self.detail.setWordWrap(True)
-        self.detail.setSizePolicy(
-            QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred
-        )
-        self.detail.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-        )
-        self.detail.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        detail_layout.addWidget(self.detail)
-        detail_layout.addStretch(1)
-        map_row.addWidget(detail_card, 0)
-        right_layout.addLayout(map_row, 1)
-
-        self.hover_label = QLabel()
-        wrap(self.hover_label)
-        design.set_role(self.hover_label, "hint")
-        right_layout.addWidget(self.hover_label)
-
-        self.summary = QLabel()
-        wrap(self.summary)
-        design.set_role(self.summary, "hint")
-        right_layout.addWidget(self.summary)
-        body.addWidget(right, 1)
+        right_layout.addStretch(1)
+        body.addLayout(right_layout, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -307,15 +267,16 @@ class ExportRegionDialog(QDialog):
         self._sync_save_status()
         selection = self.selection()
         self.summary.setText(
-            i18n.tr("本次：共 %d 个区块　x %d … %d　z %d … %d（%d × %d）")
+            i18n.tr(
+                "本次：共 %d 个区块　x %d … %d　z %d … %d\n"
+                "（右图只说明三种模式的取法，范围以上面的输入为准）"
+            )
             % (
                 selection.total,
                 selection.min_x,
                 selection.min_x + selection.count_x - 1,
                 selection.min_z,
                 selection.min_z + selection.count_z - 1,
-                selection.count_x,
-                selection.count_z,
             )
         )
         self._update_state_grid(selection)
@@ -335,20 +296,16 @@ class ExportRegionDialog(QDialog):
         design.set_role(self.save_status, role)
 
     def _update_state_grid(self, selection) -> None:
-        """把概览画出来：以"有数据的区块"为中心向外 5 格，并标出本次范围。
+        """把"导过没有"画出来。数据源没给就什么都不做。
 
-        数据源没给（快速导出）就只画本次范围那一块，并说明原因——
-        图仍旧在，只是没有"导过没有"这一层信息。
-
-        只在存档 / 维度 / 本次范围真的变了时才重算：一次要问上百格，
-        每敲一个数字都重算是浪费（更别说文件系统查询不便宜）。
+        只在范围/存档/维度真的变了时才重算：这块每次改动都会跑一遍文件系统查询，
+        范围一大就不便宜（大范围只画左上角那一块，见 ChunkStateGrid 的上限）。
         """
-
-        world = self.save_edit.text().strip()
-        dimension = self.dimension.currentData()
+        if self._state_provider is None:
+            return
         key = (
-            world,
-            dimension,
+            self.save_edit.text().strip(),
+            self.dimension.currentData(),
             selection.min_x,
             selection.min_z,
             selection.count_x,
@@ -357,111 +314,23 @@ class ExportRegionDialog(QDialog):
         if key == self._grid_key:
             return
         self._grid_key = key
-        if self._grid_scope != (world, dimension):
-            # 换了存档/维度，之前点开的那条详情就不作数了
-            self._grid_scope = (world, dimension)
-            self._reset_detail()
-
-        box = self._overview_box(world, dimension, selection)
-        min_x, min_z, count_x, count_z = box
+        world = key[0]
+        rows = min(selection.count_z, GRID_MAX)
+        columns = min(selection.count_x, GRID_MAX)
         cells: dict = {}
-        self._cell_info = {}
-        if self._state_provider is not None and world and Path(world).is_dir():
+        if world and Path(world).is_dir():
+            # 一次问一批：一格格问要走上百次"读记录 + 比 .mca"，打开对话框会卡一下
             wanted = [
-                (min_x + column, min_z + row)
-                for row in range(count_z)
-                for column in range(count_x)
+                (selection.min_x + column, selection.min_z + row)
+                for row in range(rows)
+                for column in range(columns)
             ]
-            found = self._state_provider(world, dimension, wanted)
-            cells = dict(found)
-            self._cell_info = dict(found)
-        self.state_map.set_area(
-            min_x,
-            min_z,
-            count_x,
-            count_z,
+            cells = dict(self._state_provider(world, key[1], wanted))
+        self.state_grid.set_area(
+            selection.min_x, selection.min_z, selection.count_x, selection.count_z,
             cells,
-            selection=(
-                selection.min_x,
-                selection.min_z,
-                selection.count_x,
-                selection.count_z,
-            ),
         )
-        drawn = (self.state_map.grid.count_x, self.state_map.grid.count_z)
-        note = ""
-        if drawn != (count_x, count_z):
-            note = i18n.tr("（范围太大，图上只画了中间 %d × %d，其余靠拖动查看）") % drawn
-        self.grid_size_label.setText(
-            i18n.tr("区块概览：%d × %d%s") % (count_x, count_z, note)
-        )
-        # 让"本次范围"落在眼前：图比视口大时滚到它的中心
-        self.state_map.center_on_chunk(
-            selection.min_x + (selection.count_x - 1) // 2,
-            selection.min_z + (selection.count_z - 1) // 2,
-        )
-
-    def _overview_box(self, world: str, dimension: str, selection):
-        """概览范围：数据的外接框各向外 5 格，并并上本次范围。
-
-        没有数据（或快速导出没有索引）时就用本次范围的中心向外 5 格——
-        至少让人看到"周围一圈是什么样"。
-        """
-
-        radius = OVERVIEW_RADIUS
-        lo_x, hi_x = selection.min_x, selection.min_x + selection.count_x - 1
-        lo_z, hi_z = selection.min_z, selection.min_z + selection.count_z - 1
-        data: list = []
-        if self._exported_provider is not None and world:
-            try:
-                data = list(self._exported_provider(world, dimension))
-            except Exception:       # 索引读不出来不该让对话框打不开
-                data = []
-        if data:
-            data_x = [int(x) for x, _ in data]
-            data_z = [int(z) for _, z in data]
-            lo_x = min(lo_x, min(data_x) - radius)
-            hi_x = max(hi_x, max(data_x) + radius)
-            lo_z = min(lo_z, min(data_z) - radius)
-            hi_z = max(hi_z, max(data_z) + radius)
-        else:
-            center_x = (lo_x + hi_x) // 2
-            center_z = (lo_z + hi_z) // 2
-            lo_x, hi_x = min(lo_x, center_x - radius), max(hi_x, center_x + radius)
-            lo_z, hi_z = min(lo_z, center_z - radius), max(hi_z, center_z + radius)
-        return lo_x, lo_z, hi_x - lo_x + 1, hi_z - lo_z + 1
-
-    # ---- 悬停与点击 ------------------------------------------------------
-
-    def _on_grid_hover(self, x: int, z: int, text: str) -> None:
-        if x < 0:
-            self.hover_label.setText("")
-            return
-        self.hover_label.setText(
-            i18n.tr("区块 (%d, %d)：%s") % (x, z, text.split("：", 1)[-1])
-        )
-
-    def _on_grid_clicked(self, x: int, z: int) -> None:
-        """点一格 → 详情显示在图的旁边（没点之前给一句用法说明）。"""
-
-        if x < 0:
-            return
-        state, detail = self._cell_info.get((x, z), ("missing", ""))
-        lines = [
-            i18n.tr("区块 (%d, %d)") % (x, z),
-            i18n.tr("状态：%s") % i18n.tr(STATE_LABELS.get(state, state)),
-        ]
-        if detail:
-            lines.append(detail)
-        lines.append(i18n.tr("区域文件：r.%d.%d.mca") % (x >> 5, z >> 5))
-        if state == "missing":
-            lines.append(i18n.tr("这一块还没有导出过。"))
-        self.detail.setText("\n".join(lines))
-
-    def _reset_detail(self) -> None:
-        self.detail.setText(
-            i18n.tr("在左边的概览图上点一个区块，这里显示它的详情。")
-        )
+        self.state_grid.setVisible(True)
 
     # ---- 结果 ------------------------------------------------------------
 

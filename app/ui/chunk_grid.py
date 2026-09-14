@@ -22,6 +22,9 @@ from . import design
 CELL = 22
 MAX_CELLS = 32      # 单边最多画这么多格（查询窗口用；导出对话框给更大的上限）
 DRAG_SLOP = 3       # 拖动阈值：超过这么多像素才算"拖"，否则算"点"
+# "没点到格子"的哨兵值。**不能用 -1**：区块坐标本来就是负数，
+# (-1, -1) 是一个真实存在的区块——用 -1 当哨兵会让"点到 (-1,-1) 反而没反应"。
+NO_CELL = -(1 << 30)
 
 def state_color(state: str) -> QColor:
     """三种状态的颜色取当前主题的语义色（深浅两套都看得清）。
@@ -186,7 +189,7 @@ class ChunkStateGrid(QWidget):
         row = int((pos_y - 1) // self._cell)
         if 0 <= column < self._count_x and 0 <= row < self._count_z:
             return self._min_x + column, self._min_z + row
-        return -1, -1
+        return NO_CELL, NO_CELL
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._press is not None:
@@ -197,9 +200,9 @@ class ChunkStateGrid(QWidget):
                 self._press = event.position()
                 return
         x, z = self._hit(event.position().x(), event.position().y())
-        if x < 0:
+        if x == NO_CELL:
             self.setToolTip("")
-            self.hovered.emit(-1, -1, "")
+            self.hovered.emit(NO_CELL, NO_CELL, "")
         else:
             state, detail = self._cells.get((x, z), (STATE_MISSING, ""))
             text = "区块 (%d, %d)：%s%s" % (
@@ -228,7 +231,7 @@ class ChunkStateGrid(QWidget):
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self.setToolTip("")
-        self.hovered.emit(-1, -1, "")
+        self.hovered.emit(NO_CELL, NO_CELL, "")
         super().leaveEvent(event)
 
 
