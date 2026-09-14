@@ -36,6 +36,8 @@ from ..materials import inspect_source, projects_using
 from ..applog import logger
 from ..sources import ARCHIVE_SUFFIXES
 from . import design
+from . import popup
+from .. import i18n
 from .widgets import wrap
 
 ICON_SIZE = 32
@@ -83,11 +85,12 @@ class MaterialManagerDialog(QDialog):
 
     def __init__(self, app_dir: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("材质管理")
+        self.setWindowTitle(i18n.tr("材质管理"))
         self._app_dir = app_dir
         self.library = Library.load(app_dir)
         self._build_ui()
         self._refresh()
+        i18n.translate(self)
         self.layout().setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
 
     # ---- 界面 ------------------------------------------------------------
@@ -96,8 +99,10 @@ class MaterialManagerDialog(QDialog):
         root = QVBoxLayout(self)
 
         hint = QLabel(
-            "右边列表的顺序就是叠加顺序：<b>越靠下优先级越高</b>，"
-            "下面的会覆盖上面的同名贴图。"
+            i18n.tr(
+                "右边列表的顺序就是叠加顺序：<b>越靠下优先级越高</b>，"
+                "下面的会覆盖上面的同名贴图。"
+            )
         )
         hint.setTextFormat(Qt.TextFormat.RichText)
         wrap(hint)
@@ -108,30 +113,30 @@ class MaterialManagerDialog(QDialog):
         root.addLayout(columns)
 
         left_box = QVBoxLayout()
-        left_box.addWidget(QLabel("可用的素材"))
+        left_box.addWidget(QLabel(i18n.tr("可用的素材")))
         self.available = self._make_list()
         left_box.addWidget(self.available)
-        import_button = QPushButton("导入素材包")
+        import_button = QPushButton(i18n.tr("导入素材包"))
         import_button.clicked.connect(self._import)
         left_box.addWidget(import_button)
         # 删除是"从素材库里移除"，属于左列的事；放右边会让人以为删的是"本次启用"
-        self.btn_remove = QPushButton("从库中删除")
+        self.btn_remove = QPushButton(i18n.tr("从库中删除"))
         self.btn_remove.clicked.connect(self._remove_from_library)
         left_box.addWidget(self.btn_remove)
         # 兜底：出了说不清的问题时，把库与缓存清空重来，比一点点排查快
-        self.btn_clear = QPushButton("清空素材库")
+        self.btn_clear = QPushButton(i18n.tr("清空素材库"))
         self.btn_clear.clicked.connect(self._clear_everything)
-        self.btn_clear.setToolTip("删掉导入的素材与组合缓存，回到刚装好的状态")
+        self.btn_clear.setToolTip(i18n.tr("删掉导入的素材与组合缓存，回到刚装好的状态"))
         left_box.addWidget(self.btn_clear)
         columns.addLayout(left_box)
 
         middle = QVBoxLayout()
         middle.addStretch(1)
         for name, label, slot in (
-            ("btn_enable", "启用 →", self._enable_selected),
-            ("btn_disable", "← 停用", self._disable_selected),
-            ("btn_up", "上移 ↑", lambda: self._move(-1)),
-            ("btn_down", "下移 ↓", lambda: self._move(1)),
+            ("btn_enable", i18n.tr("启用 →"), self._enable_selected),
+            ("btn_disable", i18n.tr("← 停用"), self._disable_selected),
+            ("btn_up", i18n.tr("上移 ↑"), lambda: self._move(-1)),
+            ("btn_down", i18n.tr("下移 ↓"), lambda: self._move(1)),
         ):
             button = QPushButton(label)
             button.clicked.connect(slot)
@@ -141,7 +146,7 @@ class MaterialManagerDialog(QDialog):
         columns.addLayout(middle)
 
         right_box = QVBoxLayout()
-        right_box.addWidget(QLabel("本次启用（上 → 下 = 优先级递增）"))
+        right_box.addWidget(QLabel(i18n.tr("本次启用（上 → 下 = 优先级递增）")))
         self.selected = self._make_list()
         right_box.addWidget(self.selected)
         columns.addLayout(right_box)
@@ -244,14 +249,14 @@ class MaterialManagerDialog(QDialog):
         self._fill(self.selected, self.library.selected())
         base = self.library.base
         if not self.library.selected():
-            self.status.setText("还没有启用任何素材——导出会是白模。")
+            self.status.setText(i18n.tr("还没有启用任何素材——导出会是白模。"))
         elif base is None:
             self.status.setText(
-                "注意：没有启用「原版」——它是映射表的底，缺了它导不出带贴图的模型。"
+                i18n.tr("注意：没有启用「原版」——它是映射表的底，缺了它导不出带贴图的模型。")
             )
         else:
             self.status.setText(
-                "底包：%s　启用 %d 项"
+                i18n.tr("底包：%s　启用 %d 项")
                 % (base.name, len(self.library.selected()))
             )
         self._update_buttons()
@@ -329,7 +334,7 @@ class MaterialManagerDialog(QDialog):
         payload = result.get("payload")
         if isinstance(payload, Exception):
             logger().exception("导入素材失败: %s", chosen)
-            QMessageBox.warning(self, "导入失败", str(payload))
+            popup.warning(self, "导入失败", str(payload))
             return
         source = payload
         logger().info("导入素材: %s（识别为 %s）", chosen, source.kind)
@@ -339,7 +344,7 @@ class MaterialManagerDialog(QDialog):
             self.library.enable(source.id)
         self._refresh()
         if source.kind == "unknown":
-            QMessageBox.information(
+            popup.info(
                 self,
                 "认不出这个文件",
                 "已导入但没识别出类型：\n%s" % chosen,
@@ -354,7 +359,7 @@ class MaterialManagerDialog(QDialog):
             self.library.by_id(i).name for i in ids if self.library.by_id(i)
         )
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "从库中删除",
                 "把以下素材从库中移除（解压出来的文件也会删掉）？\n\n%s" % names,
@@ -379,7 +384,7 @@ class MaterialManagerDialog(QDialog):
         """
         total = len(self.library.sources)
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "清空重来",
                 "将删除：\n"

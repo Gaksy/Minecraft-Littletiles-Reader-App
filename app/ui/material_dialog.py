@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .. import i18n
 from . import design
 from .widgets import wrap
 
@@ -43,19 +44,19 @@ class MaterialChoiceDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("本次导出用什么材质？")
+        self.setWindowTitle(i18n.tr("本次导出用什么材质？"))
         self._choice = ""
         self.resize(560, 360)
 
         layout = QVBoxLayout(self)
 
         if configured:
-            label = QLabel("上次使用：\n%s" % configured)
+            label = QLabel(i18n.tr("上次使用：\n%s") % configured)
             wrap(label)
             design.set_role(label, "hint")
             layout.addWidget(label)
 
-        hint = QLabel(HELP_TEXT)
+        hint = QLabel(i18n.tr(HELP_TEXT))
         # 上面的文案带了 <b>/<br>，显式声明富文本，别指望自动识别
         hint.setTextFormat(Qt.TextFormat.RichText)
         wrap(hint)
@@ -65,17 +66,17 @@ class MaterialChoiceDialog(QDialog):
         buttons = QDialogButtonBox()
         if configured:
             use_last = buttons.addButton(
-                "继续使用上次", QDialogButtonBox.ButtonRole.AcceptRole
+                i18n.tr("继续使用上次"), QDialogButtonBox.ButtonRole.AcceptRole
             )
             use_last.clicked.connect(lambda: self._pick("last"))
         pick = buttons.addButton(
-            "打开材质管理", QDialogButtonBox.ButtonRole.AcceptRole
+            i18n.tr("打开材质管理"), QDialogButtonBox.ButtonRole.AcceptRole
         )
         # 这个框只在"库里一个素材都没有"时出现；导入、启用、排序都在材质管理里做，
         # 不要在这里另开一条"选某个文件"的路——那是我做管理界面之前的旧流程。
         pick.clicked.connect(lambda: self._pick("manage"))
         none = buttons.addButton(
-            "不用材质（白模）", QDialogButtonBox.ButtonRole.AcceptRole
+            i18n.tr("不用材质（白模）"), QDialogButtonBox.ButtonRole.AcceptRole
         )
         none.clicked.connect(lambda: self._pick("none"))
         buttons.rejected.connect(self.reject)

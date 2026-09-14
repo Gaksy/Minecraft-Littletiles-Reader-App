@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QTableWidget,
     QWidget,
 )
 
@@ -115,14 +116,16 @@ def translate(widget: QWidget | None) -> None:
     if widget is None or _current == SOURCE:
         return
     for child in [widget, *widget.findChildren(QWidget)]:
-        text = None
-        if isinstance(child, (QLabel, QGroupBox)):
-            text = child.text()
-            if isinstance(child, QGroupBox):
-                child.setTitle(tr(text))
-                continue
+        # 注意顺序：QGroupBox 没有 text()（它是 title()），先判它再判 QLabel
+        if isinstance(child, QGroupBox):
+            if child.title():
+                child.setTitle(tr(child.title()))
+        elif isinstance(child, QLabel):
+            if child.text():
+                child.setText(tr(child.text()))
         elif isinstance(child, QAbstractButton):
-            text = child.text()
+            if child.text():
+                child.setText(tr(child.text()))
         elif isinstance(child, QLineEdit):
             if child.placeholderText():
                 child.setPlaceholderText(tr(child.placeholderText()))
@@ -132,11 +135,12 @@ def translate(widget: QWidget | None) -> None:
         elif isinstance(child, QComboBox):
             for index in range(child.count()):
                 child.setItemText(index, tr(child.itemText(index)))
-        if text:
-            if isinstance(child, QLabel):
-                child.setText(tr(text))
-            elif isinstance(child, QAbstractButton):
-                child.setText(tr(text))
+        elif isinstance(child, QTableWidget):
+            # 表头文字是模型里的 item，不是控件，得单独翻
+            for column in range(child.columnCount()):
+                item = child.horizontalHeaderItem(column)
+                if item is not None and item.text():
+                    item.setText(tr(item.text()))
         if child.toolTip():
             child.setToolTip(tr(child.toolTip()))
     # 菜单项不是控件（是 QAction），得单独走一遍

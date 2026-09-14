@@ -37,6 +37,7 @@ from ..applog import logger
 from ..config import AppConfig
 from ..project import Project
 from . import design
+from . import popup
 from .widgets import wrap
 
 COVER_SIZE = 72
@@ -262,7 +263,9 @@ class ProjectListWidget(QWidget):
         self.cards.setRowStretch(max(rows, 1), 1)
 
         if not entries:
-            hint = QLabel("还没有项目。新建一个，或把已有的项目目录添加进来。")
+            hint = QLabel(
+                i18n.tr("还没有项目。新建一个，或把已有的项目目录添加进来。")
+            )
             wrap(hint)
             design.set_role(hint, "hint")
             self.cards.addWidget(hint, 0, 0, 1, COLUMNS)

@@ -47,6 +47,7 @@ from ..vanilla import build_package_from_resolved, detect_kind
 from .export_panel import ExportPanel
 from .export_dialog import ExportRegionDialog
 from . import design
+from . import popup
 from .material_dialog import MaterialChoiceDialog
 from .material_manager import MaterialManagerDialog
 from .illustration_dialog import IllustrationDialog
@@ -326,11 +327,11 @@ class MainWindow(QMainWindow):
 
         payload = result.get("payload")
         if isinstance(payload, ComposeError):
-            QMessageBox.warning(self, "组合不了", str(payload))
+            popup.warning(self, "组合不了", str(payload))
             return None
         if isinstance(payload, Exception):      # 解压/脚本报错…
             logger().exception("组合素材失败")
-            QMessageBox.warning(self, "组合失败", str(payload))
+            popup.warning(self, "组合失败", str(payload))
             return None
         composed = payload
         self._log(
@@ -395,7 +396,7 @@ class MainWindow(QMainWindow):
         self.config.language = code
         self._save_config("语言")
         logger().info("界面语言改为 %s（重启后生效）", code or "跟随系统")
-        QMessageBox.information(
+        popup.info(
             self,
             "语言",
             "界面语言已切换为 %s，重启应用后生效。" % i18n.display_name(chosen),
@@ -456,7 +457,7 @@ class MainWindow(QMainWindow):
         """清掉应用自己的数据（设置 / 素材库 / 产物 / 日志），不碰项目目录。"""
 
         if self.runner.is_running:
-            QMessageBox.information(
+            popup.info(
                 self, "导出进行中", "导出任务还没结束，现在不能清空数据。"
             )
             return
@@ -473,7 +474,7 @@ class MainWindow(QMainWindow):
             freed = appdata.clear(APP_DIR, keys)
         except OSError as error:
             logger().exception("清空数据失败：%s", keys)
-            QMessageBox.warning(self, "清空失败", str(error))
+            popup.warning(self, "清空失败", str(error))
             return
 
         total = sum(freed.values())
@@ -487,7 +488,7 @@ class MainWindow(QMainWindow):
         self.projects.refresh()
         self._refresh_status()
         self.panel.log_line("已清空：%s（释放约 %s）" % (names, human_size(total)))
-        QMessageBox.information(
+        popup.info(
             self,
             "已清空",
             "已清空：%s\n释放约 %s。\n\n项目目录没有被改动。"
@@ -500,7 +501,7 @@ class MainWindow(QMainWindow):
         """点开一张项目卡片：开一个新窗口，项目的一切都在那里面。"""
         project = Project.load(directory)
         if project is None:
-            QMessageBox.warning(
+            popup.warning(
                 self,
                 "项目读不出来",
                 "这个目录里读不到 project.json：\n%s\n\n"
@@ -535,7 +536,7 @@ class MainWindow(QMainWindow):
             + i18n.tr("会话日志：\n%s\n\n")
             + i18n.tr("素材来自本机游戏与资源包，本工具只读取、不附带、不分发。")
         )
-        QMessageBox.information(
+        popup.info(
             self,
             i18n.tr("关于"),
             text
@@ -552,7 +553,7 @@ class MainWindow(QMainWindow):
         # 导出进行中不许改素材：组合结果是那次导出正在用的东西，中途换掉会让
         # 产物一半用旧素材、一半用新素材。
         if self.runner.is_running:
-            QMessageBox.information(
+            popup.info(
                 self, "导出进行中", "导出任务还没结束，现在不能更改素材。"
             )
             return
@@ -618,13 +619,13 @@ class MainWindow(QMainWindow):
         payload = result.get("payload")
         if isinstance(payload, Exception):
             logger().exception("导入素材文件失败: %s", chosen, exc_info=payload)
-            QMessageBox.warning(self, "导入失败", str(payload))
+            popup.warning(self, "导入失败", str(payload))
             return None
         try:
             return self._apply_import(payload)
         except Exception as error:      # 兜底：别让界面卡在一个异常上
             logger().exception("导入素材文件失败: %s", chosen)
-            QMessageBox.warning(self, "导入失败", str(error))
+            popup.warning(self, "导入失败", str(error))
             return None
 
     def _apply_import(self, payload: dict) -> str | None:
@@ -646,12 +647,12 @@ class MainWindow(QMainWindow):
                 )
             )
             if not report.ok:
-                QMessageBox.warning(self, "生成失败", report.render())
+                popup.warning(self, "生成失败", report.render())
                 return None
             self.config.default_assets = str(build.package_dir)
             self.config.save()
             self._refresh_status()
-            QMessageBox.information(
+            popup.info(
                 self,
                 "素材包已生成",
                 "已用所选文件生成素材包：\n%s\n\n%d 个方块 / %d 张贴图，缺失 %d 张。\n"
@@ -666,7 +667,7 @@ class MainWindow(QMainWindow):
             return str(build.package_dir)
 
         if kind in ("resourcepack", "mod"):
-            QMessageBox.information(
+            popup.info(
                 self,
                 "这个文件还不能单独用",
                 "识别为：%s\n\n"
@@ -679,7 +680,7 @@ class MainWindow(QMainWindow):
             )
             return None
 
-        QMessageBox.warning(
+        popup.warning(
             self,
             "认不出这个文件",
             "解压后没找到 assets/minecraft，也不像资源包或模组。\n\n"
@@ -709,7 +710,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != ExportRegionDialog.DialogCode.Accepted:
             return
         if not dialog.save_edit.text().strip():
-            QMessageBox.warning(self, "缺少存档", "请先选择存档根目录。")
+            popup.warning(self, "缺少存档", "请先选择存档根目录。")
             return
         assets = self._choose_assets()
         if assets is None:

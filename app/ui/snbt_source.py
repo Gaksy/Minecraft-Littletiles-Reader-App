@@ -31,9 +31,11 @@ class PasteSnbtDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("粘贴 SNBT")
+        self.setWindowTitle(i18n.tr("粘贴 SNBT"))
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("把结构文本粘进来（游戏里复制或从文件里复制的都行）："))
+        layout.addWidget(
+            QLabel(i18n.tr("把结构文本粘进来（游戏里复制或从文件里复制的都行）："))
+        )
         self.text = QPlainTextEdit()
         self.text.setPlaceholderText(self.EXAMPLE)
         self.text.setMinimumSize(560, 300)
@@ -45,6 +47,7 @@ class PasteSnbtDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        i18n.translate(self)
 
     def snbt(self) -> str:
         return self.text.toPlainText()
@@ -54,13 +57,15 @@ def choose_snbt_source(parent: QWidget | None) -> tuple[str, str] | None:
     """问一次"结构从哪来"，返回 `("file", 路径)` / `("paste", 文本)`；取消返回 None。"""
 
     box = QMessageBox(parent)
-    box.setWindowTitle("导出 SNBT")
+    box.setWindowTitle(i18n.tr("导出 SNBT"))
     box.setIcon(QMessageBox.Icon.Question)
-    box.setText("结构从哪里来？")
-    box.setInformativeText("选一个 .txt / .struct 结构文件，或者直接把文本粘进来。")
-    from_file = box.addButton("选择文件", QMessageBox.ButtonRole.AcceptRole)
-    from_paste = box.addButton("粘贴文本", QMessageBox.ButtonRole.AcceptRole)
-    box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+    box.setText(i18n.tr("结构从哪里来？"))
+    box.setInformativeText(
+        i18n.tr("选一个 .txt / .struct 结构文件，或者直接把文本粘进来。")
+    )
+    from_file = box.addButton(i18n.tr("选择文件"), QMessageBox.ButtonRole.AcceptRole)
+    from_paste = box.addButton(i18n.tr("粘贴文本"), QMessageBox.ButtonRole.AcceptRole)
+    box.addButton(i18n.tr("取消"), QMessageBox.ButtonRole.RejectRole)
     box.exec()
     clicked = box.clickedButton()
 
@@ -73,8 +78,8 @@ def choose_snbt_source(parent: QWidget | None) -> tuple[str, str] | None:
     if clicked is not from_file:
         return None
     chosen, _ = QFileDialog.getOpenFileName(
-        parent, "选择 LittleTiles 结构文件", "",
-        "结构文件 (*.txt *.struct);;所有文件 (*)",
+        parent, i18n.tr("选择 LittleTiles 结构文件"), "",
+        i18n.tr("结构文件 (*.txt *.struct);;所有文件 (*)"),
     )
     return ("file", chosen) if chosen else None
 

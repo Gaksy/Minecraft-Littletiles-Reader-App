@@ -90,6 +90,7 @@ from .export_dialog import ExportRegionDialog
 from .export_panel import ExportPanel
 from .storage_bar import Segment, StorageBar, StorageLegend
 from . import design
+from . import popup
 from .snbt_source import choose_snbt_source, save_pasted_snbt
 from .widgets import ClickableLabel, wrap
 
@@ -106,7 +107,7 @@ class _BindingPicker(QDialog):
 
     def __init__(self, sources, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("添加素材到项目")
+        self.setWindowTitle(i18n.tr("添加素材到项目"))
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
@@ -131,6 +132,7 @@ class _BindingPicker(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        i18n.translate(self)
 
     def chosen_ids(self) -> list[str]:
         return [
@@ -143,7 +145,7 @@ class _BackupsDialog(QDialog):
 
     def __init__(self, project: Project, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("存档备份")
+        self.setWindowTitle(i18n.tr("存档备份"))
         self._project = project
         layout = QVBoxLayout(self)
         hint = QLabel(
@@ -176,6 +178,7 @@ class _BackupsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        i18n.translate(self)
         self._refresh()
 
     def _refresh(self) -> None:
@@ -215,7 +218,7 @@ class _BackupsDialog(QDialog):
             return
         freed = sum(item.stat().st_size for item in targets)
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "删除备份",
                 "删掉这 %d 份备份？\n\n将释放约 %s。存档本身不受影响。"
@@ -242,7 +245,7 @@ class _ProjectConfigDialog(QDialog):
 
     def __init__(self, project: Project, on_move, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("项目配置")
+        self.setWindowTitle(i18n.tr("项目配置"))
         self.setMinimumWidth(560)
         self.project = project
         self._on_move = on_move
@@ -313,13 +316,16 @@ class _ProjectConfigDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        i18n.translate(self)
         self._refresh()
 
     # ---- 显示 ----
 
     def _refresh(self) -> None:
-        self.directory_label.setText("项目目录：%s" % self.project.path)
-        self.save_label.setText("默认存档：%s" % (self._save_root or "（未设置）"))
+        self.directory_label.setText(i18n.tr("项目目录：%s") % self.project.path)
+        self.save_label.setText(
+            i18n.tr("默认存档：%s") % (self._save_root or i18n.tr("（未设置）"))
+        )
         self.btn_clear_save.setEnabled(bool(self._save_root))
         self._refresh_cover()
 
@@ -331,7 +337,7 @@ class _ProjectConfigDialog(QDialog):
         )
         if self._cover == _COVER_CLEAR:
             self.cover_preview.setPixmap(QPixmap())
-            self.cover_preview.setText("无封面")
+            self.cover_preview.setText(i18n.tr("无封面"))
             self.cover_preview.setStyleSheet(dashed)
             self.btn_cover_clear.setEnabled(False)
             return
@@ -351,7 +357,7 @@ class _ProjectConfigDialog(QDialog):
         cover = self.project.cover_png()
         if cover is None:
             self.cover_preview.setPixmap(QPixmap())
-            self.cover_preview.setText("无封面")
+            self.cover_preview.setText(i18n.tr("无封面"))
             self.cover_preview.setStyleSheet(dashed)
             self.btn_cover_clear.setEnabled(False)
             return
@@ -411,7 +417,7 @@ class _RetentionDialog(QDialog):
 
     def __init__(self, project: Project, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("保留策略")
+        self.setWindowTitle(i18n.tr("保留策略"))
         layout = QVBoxLayout(self)
         hint = QLabel(
             "默认什么都不自动删。下面几条按需打开——命中的旧导出会连产物目录一起清理，\n"
@@ -455,6 +461,7 @@ class _RetentionDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+        i18n.translate(self)
 
     def values(self) -> dict:
         return {
@@ -465,168 +472,181 @@ class _RetentionDialog(QDialog):
         }
 
 
-class _ChunkQueryDialog(QDialog):
-    """查某个范围里每个区块导过没有、什么时候导的。"""
+class _ChunkSearchDialog(QDialog):
+    """按区块坐标搜记录：这个 (x, z) 导过吗、哪几次、产物在哪。
 
-    def __init__(self, project: Project, store: RecordStore, parent=None) -> None:
+    以前这里是"画一个范围的网格"，导出概览接管那件事之后就没意义了；
+    真正还缺的是"我手上有块坐标，想找到当时那条记录"。所以按坐标直接搜，
+    结果是一张表，选中一条能直接打开产物目录。
+    """
+
+    def __init__(
+        self,
+        project: Project,
+        store: RecordStore,
+        parent=None,
+        initial: tuple[int, int, str] | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("查询区块导出情况")
-        self._store = store
+        self.setWindowTitle(i18n.tr("搜索区块记录"))
         self._project = project
+        self._store = store
 
         root = QVBoxLayout(self)
-        form = QFormLayout()
-        self.world = QLineEdit(project.save_root)
-        self.world.setMinimumWidth(420)
-        self.world.setPlaceholderText("存档根目录（含 level.dat 的那个文件夹）")
-        pick = QPushButton("选择文件夹")
-        pick.clicked.connect(self._pick_world)
-        world_row = QHBoxLayout()
-        world_row.addWidget(self.world, 1)
-        world_row.addWidget(pick)
-        world_widget = QWidget()
-        world_widget.setLayout(world_row)
-        form.addRow("存档", world_widget)
+        root.setSpacing(design.METRICS.gap_sm)
 
+        row = QHBoxLayout()
+        row.setSpacing(design.METRICS.gap_sm)
+        row.addWidget(QLabel(i18n.tr("区块坐标")))
+        self.x = self._spin()
+        self.z = self._spin()
+        row.addWidget(self.x)
+        row.addWidget(self.z)
+        row.addWidget(QLabel(i18n.tr("维度")))
         self.dimension = QComboBox()
+        self.dimension.addItem(i18n.tr("全部维度"), "")
         for value in DIMENSIONS:
-            self.dimension.addItem(DIMENSION_LABELS[value], value)
-        form.addRow("维度", self.dimension)
+            self.dimension.addItem(i18n.tr(DIMENSION_LABELS[value]), value)
+        row.addWidget(self.dimension)
+        search = QPushButton(i18n.tr("搜索"))
+        search.clicked.connect(self._search)
+        row.addWidget(search)
+        row.addStretch(1)
+        root.addLayout(row)
 
-        self.mode = QComboBox()
-        for value in CHUNK_MODES:
-            self.mode.addItem(CHUNK_MODE_LABELS[value], value)
-        self.mode.setCurrentIndex(CHUNK_MODES.index("center"))
-        self.mode.currentIndexChanged.connect(self._sync)
-        form.addRow("范围", self.mode)
+        self.result = QLabel()
+        wrap(self.result)
+        design.set_role(self.result, "hint")
+        root.addWidget(self.result)
 
-        self.x, self.z = self._spin(), self._spin()
-        self.radius = self._spin(low=0, high=64)
-        self.x1, self.z1 = self._spin(), self._spin()
-        self.x2, self.z2 = self._spin(), self._spin()
-        form.addRow("中心 / 单块 x", self.x)
-        form.addRow("中心 / 单块 z", self.z)
-        form.addRow("半径 r", self.radius)
-        form.addRow("范围起点 x1", self.x1)
-        form.addRow("范围起点 z1", self.z1)
-        form.addRow("范围终点 x2", self.x2)
-        form.addRow("范围终点 z2", self.z2)
-        root.addLayout(form)
-
-        query = QPushButton("查询")
-        query.clicked.connect(self._query)
-        root.addWidget(query, alignment=Qt.AlignmentFlag.AlignRight)
-
-        # 用可拖动的地图视图：查询范围一大就是几十乘几十格，能拖着看更方便
-        self.grid_map = ChunkMapView()
-        self.grid = self.grid_map.grid
-        self.grid_map.setMinimumHeight(240)     # 查询结果要看得见一块，不够就拖
-        grid_row = QHBoxLayout()
-        grid_row.addWidget(self.grid_map, 1)
-        self.summary = QLabel()
-        wrap(self.summary)
-        self.summary.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(
+            i18n.tr_all(["时间", "类型", "维度", "名称", "面数", "贴图", "大小"])
         )
-        # 摘要固定占右侧一条（wrap() 给的 Ignored 策略会被布局压成一根竖条，
-        # 中文一个字一行——这里要的是"有下限、能折行"）
-        self.summary.setSizePolicy(
-            QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred
-        )
-        self.summary.setMinimumWidth(280)
-        self.summary.setMaximumWidth(380)
-        grid_row.addWidget(self.summary, 0)
-        root.addLayout(grid_row)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        for column, width in ((0, 152), (1, 64), (2, 90), (4, 76), (5, 84), (6, 88)):
+            self.table.setColumnWidth(column, width)
+        self.table.setMinimumSize(760, 260)
+        self.table.itemSelectionChanged.connect(self._sync)
+        root.addWidget(self.table, 1)
 
-        legend = QLabel(
-            "灰 = 从未导出　绿 = 已导出且存档未变　黄 = 已导出但之后存档变过"
-        )
-        design.set_role(legend, "hint")
-        root.addWidget(legend)
+        buttons = QHBoxLayout()
+        self.btn_open = QPushButton(i18n.tr("打开产物目录"))
+        self.btn_open.clicked.connect(self._open_output)
+        buttons.addWidget(self.btn_open)
+        buttons.addStretch(1)
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.rejected.connect(self.reject)
+        buttons.addWidget(close)
+        root.addLayout(buttons)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        if initial is not None:
+            self.x.setValue(int(initial[0]))
+            self.z.setValue(int(initial[1]))
+            index = self.dimension.findData(initial[2]) if len(initial) > 2 else -1
+            if index >= 0:
+                self.dimension.setCurrentIndex(index)
         self._sync()
-        # 不锁死大小：图能拖、摘要能折行，窗口大小交给用户（内容多，固定大小会挤）
-        self.resize(920, 640)
+        i18n.translate(self)
+        self.resize(920, 520)
+        self._search()
 
     @staticmethod
-    def _spin(low: int = -100000, high: int = 100000) -> QSpinBox:
+    def _spin() -> QSpinBox:
         box = QSpinBox()
-        box.setRange(low, high)
+        box.setRange(-100000, 100000)
         return box
 
-    def _pick_world(self) -> None:
-        chosen = QFileDialog.getExistingDirectory(self, "选择存档根目录")
-        if chosen:
-            self.world.setText(chosen)
+    def _search(self) -> None:
+        x, z = self.x.value(), self.z.value()
+        dimension = self.dimension.currentData()
+        found = [
+            record
+            for record in self._store.records
+            if record.kind == "region"
+            and (x, z) in {(int(cx), int(cz)) for cx, cz in record.chunks}
+            and (not dimension or record.dimension == dimension)
+        ]
+        self.table.setRowCount(len(found))
+        for row, record in enumerate(found):
+            values = [
+                record.created_at,
+                record.kind_label,
+                DIMENSION_LABELS.get(record.dimension, record.dimension),
+                record.name,
+                str(record.faces or "—"),
+                self._textures(record),
+                human_size(record.size_bytes(self._project.path)),
+            ]
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(i18n.tr(text) if column in (1, 2) else text)
+                if column in (4, 5, 6):
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                self.table.setItem(row, column, item)
+            self.table.item(row, 0).setData(Qt.ItemDataRole.UserRole, record.id)
+        if found:
+            self.result.setText(
+                i18n.tr("找到 %d 条记录：区块 (%d, %d)") % (len(found), x, z)
+            )
+        else:
+            self.result.setText(
+                i18n.tr("没有找到记录：区块 (%d, %d) 还没有导出过。") % (x, z)
+            )
+        self.table.clearSelection()
+        self._sync()
+
+    def _textures(self, record) -> str:
+        if not record.textures:
+            return "—"
+        missing = [
+            digest
+            for digest in record.textures
+            if not library_path(self._project.path, digest).is_file()
+        ]
+        if missing:
+            return i18n.tr("%d 张（缺 %d）") % (len(record.textures), len(missing))
+        return i18n.tr("%d 张") % len(record.textures)
+
+    def _selected(self):
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        item = self.table.item(rows[0].row(), 0)
+        if item is None:
+            return None
+        return self._store.by_id(item.data(Qt.ItemDataRole.UserRole))
 
     def _sync(self) -> None:
-        mode = self.mode.currentData()
-        for widget in (self.x, self.z):
-            widget.setEnabled(mode in ("single", "center"))
-        self.radius.setEnabled(mode == "center")
-        for widget in (self.x1, self.z1, self.x2, self.z2):
-            widget.setEnabled(mode == "range")
+        self.btn_open.setEnabled(self._selected() is not None)
 
-    def _selection(self):
-        return expand_chunks(
-            self.mode.currentData(),
-            x=self.x.value(),
-            z=self.z.value(),
-            radius=self.radius.value(),
-            x1=self.x1.value(),
-            z1=self.z1.value(),
-            x2=self.x2.value(),
-            z2=self.z2.value(),
-        )
-
-    def _query(self) -> None:
-        world = self.world.text().strip()
-        if not world:
-            QMessageBox.warning(self, "缺少存档", "请先选择存档根目录。")
+    def _open_output(self) -> None:
+        record = self._selected()
+        if record is None:
             return
-        dimension = self.dimension.currentData()
-        selection = self._selection()
-        cells: dict = {}
-        counts = {state: 0 for state in STATE_LABELS}
-        # 一次问一批：范围一大就是上千格，逐格查会把窗口卡住
-        wanted = list(selection.cells())
-        states = self._store.chunk_states(world, dimension, wanted)
-        for x, z in wanted:
-            state, record = states.get((x, z), ("missing", None))
-            counts[state] = counts.get(state, 0) + 1
-            detail = ""
-            if record is not None:
-                detail = "导出于 %s" % record.created_at
-                if state != "fresh":
-                    detail += "，存档此后已修改"
-            cells[(x, z)] = (state, detail)
-        self.grid.set_area(
-            selection.min_x, selection.min_z, selection.count_x, selection.count_z, cells
-        )
-        lines = [
-            "共 %d 个区块" % selection.total,
-            "未导出 %d　已导出 %d　可能已过期 %d"
-            % (
-                counts.get("missing", 0),
-                counts.get("fresh", 0),
-                counts.get("stale", 0),
-            ),
-            "存档：%s" % world,
-            "维度：%s" % DIMENSION_LABELS.get(dimension, dimension),
-        ]
-        for x, z in selection.cells():
-            state, detail = cells[(x, z)]
-            if state != "missing":
-                lines.append("  (%d, %d) %s %s" % (x, z, STATE_LABELS[state], detail))
-            if len(lines) > 24:
-                lines.append("  …（只列前几块）")
-                break
-        if self.grid.truncated:
-            lines.append("（范围太大，格子只画了中间一部分，其余靠拖动查看）")
-        self.summary.setText("\n".join(lines))
+        from .export_panel import default_open_directory
+
+        target = self._project.path / record.output_dir
+        if target.is_dir():
+            default_open_directory(target)
+        else:
+            popup.info(
+                self,
+                i18n.tr("没有产物"),
+                i18n.tr("这条记录的产物目录不在了：\n%s") % target,
+            )
 
 
 class ProjectWindow(QMainWindow):
@@ -839,7 +859,7 @@ class ProjectWindow(QMainWindow):
 
         self.history = QTableWidget(0, 7)
         self.history.setHorizontalHeaderLabels(
-            ["时间", "类型", "名称", "区块", "面数", "贴图", "大小"]
+            i18n.tr_all(["时间", "类型", "名称", "区块", "面数", "贴图", "大小"])
         )
         self.history.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -881,7 +901,7 @@ class ProjectWindow(QMainWindow):
             ("btn_pack", "打包成 zip", self._pack_selected),
             # 「重建贴图」实际是拿 job.json 回库重跑一遍，叫「重新导出模型」才如实
             ("btn_rebuild", "重新导出模型", self._rebuild_selected),
-            ("btn_query", "查询区块", self._query_chunks),
+            ("btn_query", "搜索区块记录", self._search_chunks),
             ("btn_delete", "删除记录", self._delete_selected),
         ):
             button = QPushButton(label)
@@ -926,7 +946,8 @@ class ProjectWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(design.METRICS.gap_sm)
         self.overview_map = ChunkMapView(cell=18, max_cells=OVERVIEW_MAX)
-        self.overview_map.setMinimumHeight(220)
+        self.overview_map.setMinimumHeight(200)
+        self.overview_map.setMaximumHeight(260)
         self.overview_map.hovered.connect(self._on_overview_hover)
         self.overview_map.clicked.connect(self._on_overview_clicked)
         row.addWidget(self.overview_map, 1)
@@ -942,6 +963,11 @@ class ProjectWindow(QMainWindow):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         detail_layout.addWidget(self.overview_detail)
+        # 点到有记录的区块 → 一键去搜这个坐标的记录（两处信息对得上）
+        self.btn_overview_search = QPushButton(i18n.tr("查看这个区块的记录"))
+        self.btn_overview_search.setEnabled(False)
+        self.btn_overview_search.clicked.connect(self._search_picked_chunk)
+        detail_layout.addWidget(self.btn_overview_search)
         detail_layout.addStretch(1)
         row.addWidget(detail_card, 0)
         layout.addLayout(row, 1)
@@ -1026,10 +1052,10 @@ class ProjectWindow(QMainWindow):
 
         if not dimensions:
             self.overview_map.setVisible(False)
-            self.overview_size.setText("还没有导出记录")
+            self.overview_size.setText(i18n.tr("还没有导出记录"))
             self.overview_hover.setText("")
             self.overview_detail.setText(
-                "这个项目还没有导出记录。导出一次之后，这里会画出导过哪些区块。"
+                i18n.tr("这个项目还没有导出记录。导出一次之后，这里会画出导过哪些区块。")
             )
             return
 
@@ -1048,7 +1074,7 @@ class ProjectWindow(QMainWindow):
         count_z = min(max_z - min_z + 1, OVERVIEW_MAX)
         self.overview_map.set_area(min_x, min_z, count_x, count_z, cells)
         self.overview_size.setText(
-            "共 %d 个区块　范围 %d × %d%s"
+            i18n.tr("共 %d 个区块　范围 %d × %d%s")
             % (
                 len(cells),
                 max_x - min_x + 1,
@@ -1061,8 +1087,10 @@ class ProjectWindow(QMainWindow):
         center_x = (min(x for x, _ in keys) + max(x for x, _ in keys)) // 2
         center_z = (min(z for _, z in keys) + max(z for _, z in keys)) // 2
         self.overview_map.center_on_chunk(center_x, center_z)
-        self.overview_hover.setText("把鼠标停在格子上看这一块的坐标与状态。")
-        self.overview_detail.setText("在左边的概览图上点一个区块，这里显示它的详情。")
+        self.overview_hover.setText(i18n.tr("把鼠标停在格子上看这一块的坐标与状态。"))
+        self.overview_detail.setText(
+            i18n.tr("在左边的概览图上点一个区块，这里显示它的详情。")
+        )
 
     def _overview_cells(self, dimension: str, records: list) -> tuple[dict, dict]:
         """`{(x, z): (状态, 提示)}`：把本项目的记录摊到网格上。
@@ -1096,7 +1124,7 @@ class ProjectWindow(QMainWindow):
         if x == NO_CELL:
             return
         self.overview_hover.setText(
-            "区块 (%d, %d)：%s" % (x, z, text.split("：", 1)[-1])
+            i18n.tr("区块 (%d, %d)：%s") % (x, z, text.split("：", 1)[-1])
         )
 
     def _on_overview_clicked(self, x: int, z: int) -> None:
@@ -1104,42 +1132,55 @@ class ProjectWindow(QMainWindow):
 
         if x == NO_CELL:
             return
+        self._overview_picked = (x, z)
         state, _detail = getattr(self, "_overview_cells", {}).get((x, z), ("missing", ""))
         found = getattr(self, "_overview_records", {}).get((x, z))
+        self.btn_overview_search.setEnabled(found is not None)
         if found is None:
             self.overview_detail.setText(
-                "区块 (%d, %d)\n状态：没导过\n\n这个项目没有这一块的记录。"
+                i18n.tr("区块 (%d, %d)\n状态：没导过\n\n这个项目没有这一块的记录。")
                 % (x, z)
             )
             return
         lines = [
-            "区块 (%d, %d)" % (x, z),
-            "状态：%s" % STATE_LABELS.get(state, state),
-            "导出于 %s" % found.created_at,
-            "维度：%s" % DIMENSION_LABELS.get(found.dimension, found.dimension),
+            i18n.tr("区块 (%d, %d)") % (x, z),
+            i18n.tr("状态：%s") % i18n.tr(STATE_LABELS.get(state, state)),
+            i18n.tr("导出于 %s") % found.created_at,
+            i18n.tr("维度：%s")
+            % i18n.tr(DIMENSION_LABELS.get(found.dimension, found.dimension)),
         ]
         if found.faces:
-            lines.append("面数：%d" % found.faces)
-        lines.append("产物：%s" % found.output_dir)
-        lines.append("记录：%s" % found.id)
+            lines.append(i18n.tr("面数：%d") % found.faces)
+        lines.append(i18n.tr("产物：%s") % found.output_dir)
+        lines.append(i18n.tr("记录：%s") % found.id)
         self.overview_detail.setText("\n".join(lines))
+
+    def _search_picked_chunk(self) -> None:
+        """概览里选中的那一块 → 直接搜它的记录。"""
+
+        picked = getattr(self, "_overview_picked", None)
+        if picked is None:
+            return
+        self._search_chunks(picked[0], picked[1], self.overview_dimension.currentData())
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
 
         materials = bar.addMenu("素材(&M)")
         materials.addAction("材质管理", self._open_material_manager)
-        materials.addAction("添加素材到本项目", self._add_materials)
+        materials.addAction(i18n.tr("添加素材到本项目"), self._add_materials)
 
-        project_menu = bar.addMenu("项目(&P)")
+        project_menu = bar.addMenu(i18n.tr("项目(&P)"))
         project_menu.addAction("项目配置", self._edit_project_config)
-        project_menu.addAction("打开项目目录", lambda: self._open_path(self.project.path))
-        project_menu.addAction("导出项目配置包", self._export_config)
-        project_menu.addAction("从配置包导入到本项目", self._import_config_into)
+        project_menu.addAction(
+            i18n.tr("打开项目目录"), lambda: self._open_path(self.project.path)
+        )
+        project_menu.addAction(i18n.tr("导出项目配置包"), self._export_config)
+        project_menu.addAction(i18n.tr("从配置包导入到本项目"), self._import_config_into)
         project_menu.addSeparator()
         project_menu.addAction("删除项目", self._delete_this_project)
         project_menu.addSeparator()
-        project_menu.addAction("关闭项目界面", self.close)
+        project_menu.addAction(i18n.tr("关闭项目界面"), self.close)
 
         help_menu = bar.addMenu("帮助(&H)")
         help_menu.addAction("关于", self._show_about)
@@ -1169,19 +1210,21 @@ class ProjectWindow(QMainWindow):
         self._refresh_storage()
         backups = self.project.backups()
         self.backup_label.setText(
-            "已备份 %d 次　最近：%s" % (len(backups), backups[0].name)
+            i18n.tr("已备份 %d 次　最近：%s") % (len(backups), backups[0].name)
             if backups
-            else "还没有备份过"
+            else i18n.tr("还没有备份过")
         )
 
     def _refresh_basic(self) -> None:
         """名称 / 简介 / 目录 / 存档位置：界面上只读，改要走「项目配置」。"""
 
-        name = self.project.name or "未命名项目"
+        name = self.project.name or i18n.tr("未命名项目")
         self.name_label.setText(name)
-        self.description_label.setText(self.project.description or "（还没有简介）")
-        self.directory_label.setText("目录：%s" % self.project.path)
-        self.save_label.setText(self.project.save_root or "（未设置）")
+        self.description_label.setText(
+            self.project.description or i18n.tr("（还没有简介）")
+        )
+        self.directory_label.setText(i18n.tr("目录：%s") % self.project.path)
+        self.save_label.setText(self.project.save_root or i18n.tr("（未设置）"))
         self.btn_backup.setEnabled(bool(self.project.save_root))
         self.setWindowTitle("项目 · %s" % name)
 
@@ -1190,7 +1233,7 @@ class ProjectWindow(QMainWindow):
         theme = design.theme()
         if cover is None:
             self.cover.setPixmap(QPixmap())
-            self.cover.setText("封面\n（点击选择）")
+            self.cover.setText(i18n.tr("封面\n（点击选择）"))
             self.cover.setStyleSheet(
                 "border:%dpx dashed %s; color:%s;"
                 % (design.METRICS.border_width, theme.border, theme.text_3)
@@ -1235,13 +1278,13 @@ class ProjectWindow(QMainWindow):
         bound = bound_library(self.project, library)
         ready = (self.project.package_dir / "block_textures.tsv").is_file()
         if not bound.enabled:
-            text = "还没有绑定素材：导出会是白模（几何完整，没有贴图）。"
+            text = i18n.tr("还没有绑定素材：导出会是白模（几何完整，没有贴图）。")
             self.btn_recompose.setEnabled(False)
         elif ready:
-            text = "素材包：已就绪（%d 项）" % len(bound.enabled)
+            text = i18n.tr("素材包：已就绪（%d 项）") % len(bound.enabled)
             self.btn_recompose.setEnabled(True)
         else:
-            text = "素材包：需要重新组合（导出前会自动做一次）"
+            text = i18n.tr("素材包：需要重新组合（导出前会自动做一次）")
             self.btn_recompose.setEnabled(True)
         self.package_status.setText(text)
         design.set_role(self.package_status, "hint")
@@ -1299,7 +1342,12 @@ class ProjectWindow(QMainWindow):
     def _refresh_storage(self) -> None:
         items = categories(self.project.path)
         segments = [
-            Segment(category.key, category.label, _color(category.color), category.size)
+            Segment(
+                category.key,
+                i18n.tr(category.label),
+                _color(category.color),
+                category.size,
+            )
             for category in items
         ]
         self.storage_bar.set_segments(segments)
@@ -1308,7 +1356,7 @@ class ProjectWindow(QMainWindow):
         if segments:
             biggest = segments[0]
             self.storage_total.setText(
-                "共 %s　最大一类：%s %s（%.1f%%）"
+                i18n.tr("共 %s　最大一类：%s %s（%.1f%%）")
                 % (
                     human_size(total),
                     biggest.label,
@@ -1317,7 +1365,7 @@ class ProjectWindow(QMainWindow):
                 )
             )
         else:
-            self.storage_total.setText("这个项目还什么都没有。")
+            self.storage_total.setText(i18n.tr("这个项目还什么都没有。"))
         self._refresh_retention()
 
     # ---- 基本配置 --------------------------------------------------------
@@ -1393,7 +1441,7 @@ class ProjectWindow(QMainWindow):
         if target == self.project.path:
             return
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "移动项目",
                 "把整个项目目录搬到：\n%s\n\n"
@@ -1407,7 +1455,7 @@ class ProjectWindow(QMainWindow):
             self.project.move_to(target)
         except Exception as error:
             logger().exception("移动项目失败：%s", old)
-            QMessageBox.warning(self, "移动失败", str(error))
+            popup.warning(self, "移动失败", str(error))
             return
         self.config.unregister_project(old)
         self.config.register_project(self.project.path)
@@ -1423,7 +1471,7 @@ class ProjectWindow(QMainWindow):
         from .material_manager import MaterialManagerDialog
 
         if self.panel.runner.is_running:
-            QMessageBox.information(
+            popup.info(
                 self, "导出进行中", "导出任务还没结束，现在不能更改素材库。"
             )
             return
@@ -1445,7 +1493,7 @@ class ProjectWindow(QMainWindow):
     def _add_materials(self) -> None:
         library = Library.load(self.app_dir)
         if not library.sources:
-            QMessageBox.information(
+            popup.info(
                 self,
                 "素材库是空的",
                 "先在「素材 → 材质管理」里导入原版客户端 jar / 资源包 / 模组，"
@@ -1480,7 +1528,7 @@ class ProjectWindow(QMainWindow):
                 )
             except Exception as error:
                 logger().exception("绑定素材失败：%s", source.name)
-                QMessageBox.warning(self, "绑定失败", str(error))
+                popup.warning(self, "绑定失败", str(error))
         self.project.save()
         self._force_recompose = True
         self._refresh_bindings()
@@ -1495,7 +1543,7 @@ class ProjectWindow(QMainWindow):
         library = Library.load(self.app_dir)
         source = library.by_id(source_id)
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "从项目移除",
                 "把「%s」从本项目移除？\n\n项目里的副本会被删掉，素材库里的原件不动。"
@@ -1548,17 +1596,17 @@ class ProjectWindow(QMainWindow):
         except ComposeError as error:
             self._force_recompose = False
             if report:
-                QMessageBox.information(self, "没有素材", str(error))
+                popup.info(self, "没有素材", str(error))
             return None
         except Exception as error:
             logger().exception("组合项目素材失败")
-            QMessageBox.warning(self, "组合失败", str(error))
+            popup.warning(self, "组合失败", str(error))
             return None
         self._force_recompose = False
         if report or not package.reused:
             self.panel.log_line("素材包：%s（%s）" % (package.package_dir.name, package.note))
         if package.stale:
-            QMessageBox.information(
+            popup.info(
                 self,
                 "素材包是旧的",
                 "项目里这份素材包是以前组合的，绑定的素材已经不在素材库里了。\n"
@@ -1612,7 +1660,7 @@ class ProjectWindow(QMainWindow):
             return
         save_root = dialog.save_edit.text().strip()
         if not save_root:
-            QMessageBox.warning(self, "缺少存档", "请先选择存档根目录。")
+            popup.warning(self, "缺少存档", "请先选择存档根目录。")
             return
 
         package = self._assets_for_export()
@@ -1713,7 +1761,7 @@ class ProjectWindow(QMainWindow):
         library = Library.load(self.app_dir)
         bound = bound_library(self.project, library)
         if not bound.enabled:
-            answer = QMessageBox.question(
+            answer = popup.ask(
                 self,
                 "没有绑定素材",
                 "这个项目还没有绑定材质包 / 模组。\n\n"
@@ -1778,7 +1826,7 @@ class ProjectWindow(QMainWindow):
             record.job or (record.output_dir + "/job.json")
         )
         if not job_path.is_file():
-            QMessageBox.information(
+            popup.info(
                 self,
                 "无法重新导出",
                 "这条记录没有留下 job.json（只有项目模式下导出才会留），\n"
@@ -1787,7 +1835,7 @@ class ProjectWindow(QMainWindow):
             return
         package = self.project.package_dir
         if not (package / "block_textures.tsv").is_file():
-            QMessageBox.information(
+            popup.info(
                 self,
                 "无法重新导出",
                 "项目里还没有素材包（%s）。\n\n先在「素材」里绑定素材并组合一次，"
@@ -1797,7 +1845,7 @@ class ProjectWindow(QMainWindow):
         try:
             job = json.loads(job_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            QMessageBox.warning(self, "无法重新导出", "job.json 读不出来：%s" % error)
+            popup.warning(self, "无法重新导出", "job.json 读不出来：%s" % error)
             return
 
         missing = [
@@ -1806,7 +1854,7 @@ class ProjectWindow(QMainWindow):
             if not library_path(self.project.path, digest).is_file()
         ]
         if record.textures and not missing and (
-            QMessageBox.question(
+            popup.ask(
                 self, "贴图都还在", "这条记录用到的贴图在库里都还在，还要重跑一遍吗？"
             )
             != QMessageBox.StandardButton.Yes
@@ -1847,7 +1895,7 @@ class ProjectWindow(QMainWindow):
             )
         except Exception as error:
             logger().exception("重新导出模型失败：%s", record.id)
-            QMessageBox.warning(self, "重新导出失败", str(error))
+            popup.warning(self, "重新导出失败", str(error))
             return
         before = len(record.textures)
         record.textures = sorted(set(record.textures) | set(absorbed))
@@ -1886,7 +1934,7 @@ class ProjectWindow(QMainWindow):
         if job.is_file():
             self._open_path(job)
         else:
-            QMessageBox.information(self, "没有 job.json", "这次的记录里没有 job.json。")
+            popup.info(self, "没有 job.json", "这次的记录里没有 job.json。")
 
     def _pack_selected(self) -> None:
         """把选中的那条记录打成 zip：模型 + MTL + 贴图，方便拷到别处。"""
@@ -1897,7 +1945,7 @@ class ProjectWindow(QMainWindow):
         record = records[0]
         obj = self.project.path / (record.obj or (record.output_dir + "/model.obj"))
         if not obj.is_file():
-            QMessageBox.information(
+            popup.info(
                 self,
                 "找不到模型",
                 "这条记录的模型文件不在了：\n%s\n\n"
@@ -1949,8 +1997,12 @@ class ProjectWindow(QMainWindow):
         self._refresh_history()
         self._refresh_storage()
 
-    def _query_chunks(self) -> None:
-        _ChunkQueryDialog(self.project, self.store, self).exec()
+    def _search_chunks(self, x: int | None = None, z: int | None = None,
+                       dimension: str | None = None) -> None:
+        """按坐标搜记录；从导出概览点进来时带上那个坐标。"""
+
+        initial = None if x is None or z is None else (int(x), int(z), dimension or "")
+        _ChunkSearchDialog(self.project, self.store, self, initial=initial).exec()
 
     # ---- 存储与清理 ------------------------------------------------------
 
@@ -1975,16 +2027,22 @@ class ProjectWindow(QMainWindow):
             int(self.project.keep_days or 0),
             int(self.project.keep_size_mb or 0),
         ):
-            self.retention_label.setText("保留策略：不自动清理（只在手动操作时清理）。")
+            self.retention_label.setText(
+                i18n.tr("保留策略：不自动清理（只在手动操作时清理）。")
+            )
             self.btn_clean_outputs.setToolTip("只保留最近 N 次，其余连产物一起删")
             return
         plan = self._retention_plan()
         if plan.is_empty:
-            self.retention_label.setText("保留策略：已生效，当前没有需要清理的导出。")
+            self.retention_label.setText(
+                i18n.tr("保留策略：已生效，当前没有需要清理的导出。")
+            )
         else:
             self.retention_label.setText(
-                "保留策略：可清理 %d 次旧导出，约 %s（打开「保留策略」可调整，"
-                "或点「清理旧产物」现在清）"
+                i18n.tr(
+                    "保留策略：可清理 %d 次旧导出，约 %s（打开「保留策略」可调整，"
+                    "或点「清理旧产物」现在清）"
+                )
                 % (len(plan.victims), human_size(plan.freed))
             )
 
@@ -1998,7 +2056,7 @@ class ProjectWindow(QMainWindow):
         self._refresh_retention()
         plan = self._retention_plan()
         if not plan.is_empty and (
-            QMessageBox.question(
+            popup.ask(
                 self, "按策略清理", plan.render() + "\n\n现在就清理吗？"
             )
             == QMessageBox.StandardButton.Yes
@@ -2024,7 +2082,7 @@ class ProjectWindow(QMainWindow):
         if plan.is_empty:
             return
         if (
-            QMessageBox.question(self, "保留策略", plan.render() + "\n\n现在清理吗？")
+            popup.ask(self, "保留策略", plan.render() + "\n\n现在清理吗？")
             == QMessageBox.StandardButton.Yes
         ):
             self._apply_retention(plan)
@@ -2035,18 +2093,18 @@ class ProjectWindow(QMainWindow):
             if target.exists():
                 self._open_path(target)
                 return
-        QMessageBox.information(self, "这一类的目录还没建", "这个类别暂时是空的。")
+        popup.info(self, "这一类的目录还没建", "这个类别暂时是空的。")
 
     def _prune_textures(self) -> None:
         found = orphans(self.project.path, self.store.records)
         if not found:
-            QMessageBox.information(
+            popup.info(
                 self, "没有可清理的", "贴图库里没有没人引用的贴图。"
             )
             return
         size = sum(item.stat().st_size for item in found if item.is_file())
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "清理贴图",
                 "删掉 %d 张没有任何记录引用的贴图？\n\n将释放约 %s。"
@@ -2064,18 +2122,18 @@ class ProjectWindow(QMainWindow):
         """按时间保留最近 N 次导出（只删产物目录与记录，不动贴图库与输入副本）。"""
         records = self.store.records
         if not records:
-            QMessageBox.information(self, "没有产物", "这个项目还没有导出过。")
+            popup.info(self, "没有产物", "这个项目还没有导出过。")
             return
         keep = self._ask_keep_count()
         if keep is None:
             return
         victims = records[keep:]
         if not victims:
-            QMessageBox.information(self, "不用清理", "导出的次数还没超过 %d 次。" % keep)
+            popup.info(self, "不用清理", "导出的次数还没超过 %d 次。" % keep)
             return
         total = sum(r.size_bytes(self.project.path) for r in victims)
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "清理旧产物",
                 "只保留最近 %d 次导出，删掉更早的 %d 次？\n\n将释放约 %s。\n"
@@ -2117,7 +2175,7 @@ class ProjectWindow(QMainWindow):
     def _backup_save(self) -> None:
         save_root = self.project.save_root
         if not save_root or not Path(save_root).is_dir():
-            QMessageBox.warning(
+            popup.warning(
                 self,
                 "找不到存档",
                 "默认存档位置没有设置，或者指向的目录已经不在了。\n\n"
@@ -2133,7 +2191,7 @@ class ProjectWindow(QMainWindow):
             )
         except Exception as error:
             logger().exception("备份存档失败：%s", save_root)
-            QMessageBox.warning(self, "备份失败", str(error))
+            popup.warning(self, "备份失败", str(error))
             return
         self.panel.log_line("存档已备份：%s" % archive)
         self._refresh_all()
@@ -2153,9 +2211,9 @@ class ProjectWindow(QMainWindow):
         try:
             archive = self.project.export_config(chosen)
         except Exception as error:
-            QMessageBox.warning(self, "导出失败", str(error))
+            popup.warning(self, "导出失败", str(error))
             return
-        QMessageBox.information(
+        popup.info(
             self,
             "项目配置已导出",
             "已导出：\n%s\n\n里面是 project.json 与封面；素材副本与产物不带"
@@ -2169,7 +2227,7 @@ class ProjectWindow(QMainWindow):
         if not chosen:
             return
         if (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 "导入配置包",
                 "用这个包里的配置覆盖当前项目的名称、描述、封面与素材绑定？\n\n"
@@ -2181,7 +2239,7 @@ class ProjectWindow(QMainWindow):
         try:
             imported = Project.import_config(chosen, self.project.path)
         except Exception as error:
-            QMessageBox.warning(self, "导入失败", str(error))
+            popup.warning(self, "导入失败", str(error))
             return
         # 目录以当前项目为准：包里的路径是别的机器上的
         self.project.name = imported.name
@@ -2193,7 +2251,7 @@ class ProjectWindow(QMainWindow):
         self.project.save()
         self._force_recompose = True
         self._refresh_all()
-        QMessageBox.information(
+        popup.info(
             self,
             "已导入",
             "配置已导入。素材绑定原样保留了 id，素材库里没有的条目会显示为"
@@ -2201,7 +2259,7 @@ class ProjectWindow(QMainWindow):
         )
 
     def _show_about(self) -> None:
-        QMessageBox.information(
+        popup.info(
             self,
             "关于项目模式",
             "项目 = 一个目录 + 一份 project.json。\n\n"
@@ -2217,10 +2275,10 @@ class ProjectWindow(QMainWindow):
         from .export_panel import default_open_directory
 
         if path.is_dir() and not path.exists():
-            QMessageBox.information(self, "找不到", "这个路径不存在了：\n%s" % path)
+            popup.info(self, "找不到", "这个路径不存在了：\n%s" % path)
             return
         if not path.exists():
-            QMessageBox.information(self, "找不到", "这个文件不存在了：\n%s" % path)
+            popup.info(self, "找不到", "这个文件不存在了：\n%s" % path)
             return
         default_open_directory(path if path.is_dir() else path.parent)
 

@@ -34,6 +34,7 @@ from .. import i18n
 from ..config import AppConfig
 from ..savefolder import inspect as inspect_save
 from . import design
+from . import popup
 from .widgets import wrap
 
 COVER_PREVIEW = 96
@@ -99,7 +100,7 @@ class _NamePage(QWizardPage):
 
     def validatePage(self) -> bool:  # noqa: N802 (Qt 命名)
         if not self.name_edit.text().strip():
-            QMessageBox.warning(
+            popup.warning(
                 self, i18n.tr("还差一步"), i18n.tr("请先填项目名。")
             )
             return False
@@ -221,19 +222,19 @@ class _SourcePage(QWizardPage):
     def validatePage(self) -> bool:  # noqa: N802 (Qt 命名)
         text = self.save_edit.text().strip()
         if not text:
-            QMessageBox.warning(
+            popup.warning(
                 self, i18n.tr("还差一步"), i18n.tr("存档目录是必须的，请先选一个。")
             )
             return False
         if not Path(text).is_dir():
-            QMessageBox.warning(
+            popup.warning(
                 self,
                 i18n.tr("还差一步"),
                 i18n.tr("这个路径不存在，或者不是目录：\n%s") % text,
             )
             return False
         if not inspect_save(text).ok and (
-            QMessageBox.question(
+            popup.ask(
                 self,
                 i18n.tr("确认存档目录"),
                 i18n.tr(

@@ -34,6 +34,7 @@ from ..project import Project
 from ..storage import dir_size, human_size
 from .. import i18n
 from . import design
+from . import popup
 from .widgets import wrap
 
 MODE_FORGET = "forget"
@@ -136,7 +137,7 @@ def delete_project(
 
     if dialog.mode == MODE_PURGE:
         if not (target / "project.json").is_file():
-            QMessageBox.warning(
+            popup.warning(
                 parent,
                 i18n.tr("没有删除"),
                 i18n.tr(
@@ -151,7 +152,7 @@ def delete_project(
             shutil.rmtree(target)
         except OSError as error:
             logger().exception("删除项目目录失败：%s", target)
-            QMessageBox.warning(parent, i18n.tr("删除失败"), str(error))
+            popup.warning(parent, i18n.tr("删除失败"), str(error))
             return None
         logger().info("删除项目目录：%s", target)
     else:

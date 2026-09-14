@@ -258,7 +258,8 @@ class ChunkMapView(QScrollArea):
         self.grid.panned.connect(self._pan)
         self.setWidget(self.grid)
         self.setWidgetResizable(False)
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        # 图比视口小的时候居中：靠左上角会让右边空出一大片，看着像没画完
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setCursor(Qt.CursorShape.PointingHandCursor)

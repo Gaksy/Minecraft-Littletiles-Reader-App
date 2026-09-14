@@ -128,7 +128,8 @@ class ExportPanel(QWidget):
             return False
         if not Path(cli).is_file():
             self._message_box_warning(
-                "找不到库", "找不到 LittleTilesReader：\n%s" % cli
+                i18n.tr("找不到库"),
+                i18n.tr("找不到 LittleTilesReader：\n%s") % cli,
             )
             return False
         if job_dir is not None:
@@ -288,12 +289,14 @@ class ExportPanel(QWidget):
                 % (len(result.missing), "、".join(result.missing[:5]))
             )
         box = self._message_box(self)
-        box.setWindowTitle("打包完成")
+        box.setWindowTitle(i18n.tr("打包完成"))
         box.setIcon(QMessageBox.Icon.Information)
-        box.setText("已打包成 zip。")
+        box.setText(i18n.tr("已打包成 zip。"))
         box.setInformativeText(
-            "%s\n\n模型 + MTL + %d 张贴图，约 %s。\n"
-            "把这个 zip 拷到别处解压即可使用，不需要再拷贴图库。"
+            i18n.tr(
+                "%s\n\n模型 + MTL + %d 张贴图，约 %s。\n"
+                "把这个 zip 拷到别处解压即可使用，不需要再拷贴图库。"
+            )
             % (result.zip_path, result.textures, human_size(result.size_bytes))
         )
         box.setStandardButtons(
@@ -328,19 +331,22 @@ class ExportPanel(QWidget):
             return
 
         box = self._message_box(self)
-        box.setWindowTitle("导出完成")
+        box.setWindowTitle(i18n.tr("导出完成"))
         box.setIcon(QMessageBox.Icon.Information)
-        box.setText("导出完成。")
+        box.setText(i18n.tr("导出完成。"))
         box.setInformativeText(
-            "要打开输出目录吗？\n%s\n\n"
-            "要把模型拷到别处用（发人或换机器），点面板上的「打包成 zip」——"
-            "它会连贴图一起打包。" % directory
+            i18n.tr(
+                "要打开输出目录吗？\n%s\n\n"
+                "要把模型拷到别处用（发人或换机器），点面板上的「打包成 zip」——"
+                "它会连贴图一起打包。"
+            )
+            % directory
         )
         box.setStandardButtons(
             QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Close
         )
         box.setDefaultButton(QMessageBox.StandardButton.Open)
-        never = QCheckBox("以后不再询问")
+        never = QCheckBox(i18n.tr("以后不再询问"))
         box.setCheckBox(never)
 
         if box.exec() == QMessageBox.StandardButton.Open:
@@ -351,8 +357,8 @@ class ExportPanel(QWidget):
 
     def _message_box_warning(self, title: str, text: str) -> None:
         box = self._message_box(self)
-        box.setWindowTitle(title)
+        box.setWindowTitle(i18n.tr(title))
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setText(text)
+        box.setText(i18n.tr(text))
         box.setStandardButtons(QMessageBox.StandardButton.Ok)
         box.exec()

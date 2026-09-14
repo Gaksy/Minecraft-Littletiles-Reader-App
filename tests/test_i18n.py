@@ -33,6 +33,18 @@ from app.ui import design  # noqa: E402
 from app.ui.export_dialog import ExportRegionDialog  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 from app.ui.project_list import ProjectListWidget  # noqa: E402
+from app.ui.project_window import (  # noqa: E402
+    ProjectWindow,
+    _BackupsDialog,
+    _ChunkSearchDialog,
+    _ProjectConfigDialog,
+    _RetentionDialog,
+)
+from app.ui.material_manager import MaterialManagerDialog  # noqa: E402
+from app.records import ExportRecord, RecordStore  # noqa: E402
+from app.ui.delete_project import DeleteProjectDialog  # noqa: E402
+from app.ui.project_wizard import NewProjectWizard  # noqa: E402
+from app.ui.reset_dialog import ResetDataDialog  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -129,6 +141,48 @@ def main() -> int:
         check("en：本次范围摘要也是英文",
               "This export" in dialog.summary.text(), dialog.summary.text())
         dialog.close()
+
+        # 项目界面与它那几个弹窗：这里最容易漏（分组标题不是 QLabel，
+        # 早先 translate() 对 QGroupBox 先调 text() 直接抛异常，只有非中文界面才炸）
+        project = Project.create(root / "house-en", "House")
+        project.save_root = str(root)
+        store = RecordStore(project.path)
+        store.add(
+            ExportRecord(
+                id="2026-09-14_0000_c1_0_r1", kind="region", name="c1_0_r1",
+                created_at="2026-09-14 00:00:00", output_dir="outputs/x",
+                obj="outputs/x/m.obj", world="", dimension="overworld",
+                chunks=[[1, 0]], faces=200, textures=[],
+            )
+        )
+        cases = {
+            "项目界面": lambda: ProjectWindow(project, config, root),
+            "项目配置弹窗": lambda: _ProjectConfigDialog(project, lambda: None),
+            "备份弹窗": lambda: _BackupsDialog(project),
+            "保留策略弹窗": lambda: _RetentionDialog(project),
+            "搜区块记录": lambda: _ChunkSearchDialog(project, store, None, (1, 0, "overworld")),
+            "素材管理": lambda: MaterialManagerDialog(root),
+            "清空数据": lambda: ResetDataDialog(root),
+            "新建向导": lambda: NewProjectWizard(config, root / "np"),
+            "删除项目": lambda: DeleteProjectDialog(str(project.path), project),
+        }
+        for label, factory in cases.items():
+            try:
+                widget = factory()
+                widget.resize(900, 600)
+                widget.show()
+                application.processEvents()
+                texts = visible_texts(widget)
+                leftover = [
+                    text for text in texts
+                    if any("\u4e00" <= ch <= "\u9fff" for ch in text)
+                ]
+                widget.close()
+                error = ""
+            except Exception as boom:      # noqa: BLE001 - 自检要的就是"别抛"
+                leftover, error = [], repr(boom)
+            check("en：%s 没有中文残留" % label, not leftover, str(leftover[:3]))
+            check("en：%s 能打开" % label, not error, error)
 
         # 3) 未知代码安全退回
         i18n.set_language("klingon")
