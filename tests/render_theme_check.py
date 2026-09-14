@@ -44,12 +44,44 @@ def render_dialog(theme_name: str, path: Path) -> None:
     """导出对话框里画得最多（自绘网格），单独出一张。"""
     application = QApplication.instance() or QApplication([])
     design.install(application, theme_name)
+    # 没有存档时也出一张；再出一张"有导出记录"的概览图（第 5 格才看得出差别）
     dialog = ExportRegionDialog(AppConfig())
-    dialog.resize(760, 620)
+    dialog.resize(1080, 720)
     dialog.show()
     application.processEvents()
     dialog.grab().save(str(path))
     dialog.close()
+
+    def states(_world, _dimension, cells):
+        result = {}
+        for x, z in cells:
+            if abs(x) <= 2 and abs(z) <= 1:
+                result[(x, z)] = ("fresh", "导出于 2026-09-14 01:00:00　4940 面")
+            elif (x + 2 * z) % 5 == 0:
+                result[(x, z)] = ("stale", "导出于 2026-09-13 22:10:00，存档此后已修改")
+            else:
+                result[(x, z)] = ("missing", "")
+        return result
+
+    # 概览图的颜色要有效果，存档目录得像个真的存档（至少有个 region/）
+    with tempfile.TemporaryDirectory(prefix="lt-theme-world-") as tmp:
+        world = Path(tmp) / "世界"
+        (world / "region").mkdir(parents=True)
+        (world / "region" / "r.0.0.mca").write_bytes(b"x" * 100)
+        (world / "level.dat").write_bytes(b"level")
+        mapped = ExportRegionDialog(
+            AppConfig(),
+            initial_save=str(world),
+            state_provider=states,
+            exported_provider=lambda _w, _d: [(0, 0), (1, 0), (2, 1)],
+        )
+        mapped.resize(1080, 720)
+        mapped.show()
+        application.processEvents()
+        mapped._on_grid_clicked(1, 0)
+        application.processEvents()      # 点完要过一次布局，截图里才不是半截文字
+        mapped.grab().save(str(path.with_name("dialog_map_" + theme_name + ".png")))
+        mapped.close()
 
 
 def render_project(theme_name: str, path: Path) -> None:
@@ -141,6 +173,7 @@ def main() -> int:
     render_dialogs("dark", out_dir)
     render_dialogs("light", out_dir)
     for name in ("light", "dark", "dialog_light", "dialog_dark",
+                 "dialog_map_light", "dialog_map_dark",
                  "project_light", "project_dark",
                  "project_light_bottom", "project_dark_bottom",
                  "config_light", "config_dark",

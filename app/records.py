@@ -223,6 +223,35 @@ class RecordStore:
                 result.setdefault((int(x), int(z)), record)
         return result
 
+    def chunk_states(
+        self, world: str | Path, dimension: str, cells
+    ) -> dict:
+        """一次算一批区块的三态：`(x, z) -> (state, 记录或 None)`。
+
+        为什么要有这个：概览图一画就是上百格，而 `chunk_state()` 每格都要
+        重新比一次 `.mca` 的 大小+mtime。这里把两件事都摊开——记录索引只建一次，
+        区域文件的 stat 每个文件只做一次（一个 .mca 管 32×32 个区块，省得多）。
+        """
+
+        found = self.exported_chunks(world, dimension)
+        stamps: dict[str, list | None] = {}
+        result: dict = {}
+        for x, z in cells:
+            record = found.get((int(x), int(z)))
+            if record is None:
+                result[(int(x), int(z))] = (STATE_MISSING, None)
+                continue
+            name = region_file(world, dimension, int(x), int(z)).name
+            if name not in stamps:
+                stamps[name] = mca_stamp(region_file(world, dimension, int(x), int(z)))
+            recorded = record.mca_stamps.get(name)
+            current = stamps[name]
+            if recorded is None or current is None or list(recorded) != list(current):
+                result[(int(x), int(z))] = (STATE_STALE, record)
+            else:
+                result[(int(x), int(z))] = (STATE_FRESH, record)
+        return result
+
     # ---- 修改 ------------------------------------------------------------
 
     def add(self, record: ExportRecord) -> ExportRecord:

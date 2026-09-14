@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -82,7 +83,7 @@ from ..storage import categories, human_size, percent
 from ..storage import CATEGORY_PATHS
 from ..texture_library import absorb, library_path, orphans, prune
 from .background import run_in_background
-from .chunk_grid import ChunkStateGrid
+from .chunk_grid import ChunkMapView, ChunkStateGrid
 from .export_dialog import ExportRegionDialog
 from .export_panel import ExportPanel
 from .storage_bar import Segment, StorageBar, StorageLegend
@@ -510,15 +511,25 @@ class _ChunkQueryDialog(QDialog):
         query.clicked.connect(self._query)
         root.addWidget(query, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self.grid = ChunkStateGrid()
+        # 用可拖动的地图视图：查询范围一大就是几十乘几十格，能拖着看更方便
+        self.grid_map = ChunkMapView()
+        self.grid = self.grid_map.grid
+        self.grid_map.setMinimumHeight(240)     # 查询结果要看得见一块，不够就拖
         grid_row = QHBoxLayout()
-        grid_row.addWidget(self.grid, alignment=Qt.AlignmentFlag.AlignTop)
+        grid_row.addWidget(self.grid_map, 1)
         self.summary = QLabel()
         wrap(self.summary)
         self.summary.setAlignment(
             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
         )
-        grid_row.addWidget(self.summary, 1)
+        # 摘要固定占右侧一条（wrap() 给的 Ignored 策略会被布局压成一根竖条，
+        # 中文一个字一行——这里要的是"有下限、能折行"）
+        self.summary.setSizePolicy(
+            QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred
+        )
+        self.summary.setMinimumWidth(280)
+        self.summary.setMaximumWidth(380)
+        grid_row.addWidget(self.summary, 0)
         root.addLayout(grid_row)
 
         legend = QLabel(
@@ -531,7 +542,8 @@ class _ChunkQueryDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
         self._sync()
-        self.layout().setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+        # 不锁死大小：图能拖、摘要能折行，窗口大小交给用户（内容多，固定大小会挤）
+        self.resize(920, 640)
 
     @staticmethod
     def _spin(low: int = -100000, high: int = 100000) -> QSpinBox:
@@ -573,8 +585,11 @@ class _ChunkQueryDialog(QDialog):
         selection = self._selection()
         cells: dict = {}
         counts = {state: 0 for state in STATE_LABELS}
-        for x, z in selection.cells():
-            state, record = self._store.chunk_state(world, dimension, x, z)
+        # 一次问一批：范围一大就是上千格，逐格查会把窗口卡住
+        wanted = list(selection.cells())
+        states = self._store.chunk_states(world, dimension, wanted)
+        for x, z in wanted:
+            state, record = states.get((x, z), ("missing", None))
             counts[state] = counts.get(state, 0) + 1
             detail = ""
             if record is not None:
@@ -604,7 +619,7 @@ class _ChunkQueryDialog(QDialog):
                 lines.append("  …（只列前几块）")
                 break
         if self.grid.truncated:
-            lines.append("（范围太大，格子只画了左上角一部分）")
+            lines.append("（范围太大，格子只画了中间一部分，其余靠拖动查看）")
         self.summary.setText("\n".join(lines))
 
 
@@ -1318,13 +1333,31 @@ class ProjectWindow(QMainWindow):
 
     # ---- 导出 ------------------------------------------------------------
 
-    def _chunk_state_for_dialog(self, world: str, dimension: str, x: int, z: int):
-        """给导出对话框的预览网格用：这个区块导过没有、什么时候导的。"""
-        state, record = self.store.chunk_state(world, dimension, x, z)
-        detail = "导出于 %s" % record.created_at if record is not None else ""
-        if record is not None and state != "fresh":
-            detail += "，存档此后已修改"
-        return state, detail
+    def _chunk_states_for_dialog(self, world: str, dimension: str, cells: list) -> dict:
+        """给导出对话框的概览图用：一次算一批区块的状态与说明。
+
+        一次问一批（而不是一格一回）：概览图一开就是上百格，逐格查要走上百次
+        "读记录 + 比 .mca 的 大小/mtime"，打开对话框会明显卡一下。
+        """
+
+        states = self.store.chunk_states(world, dimension, cells)
+        result: dict = {}
+        for (x, z), (state, record) in states.items():
+            if record is None:
+                result[(x, z)] = (state, "")
+                continue
+            detail = "导出于 %s" % record.created_at
+            if state != "fresh":
+                detail += "，存档此后已修改"
+            if record.faces:
+                detail += "　%d 面" % record.faces
+            result[(x, z)] = (state, detail)
+        return result
+
+    def _exported_chunks_for_dialog(self, world: str, dimension: str) -> list:
+        """这个存档里导过哪些区块——概览图靠它决定"以哪儿为中心"。"""
+
+        return list(self.store.exported_chunks(world, dimension).keys())
 
     def _export_region(self) -> None:
         if self.panel.runner.is_running:
@@ -1334,7 +1367,8 @@ class ProjectWindow(QMainWindow):
             self,
             initial=self.project.options or self.config.last_export,
             initial_save=self.project.save_root,
-            state_provider=self._chunk_state_for_dialog,
+            state_provider=self._chunk_states_for_dialog,
+            exported_provider=self._exported_chunks_for_dialog,
         )
         if dialog.exec() != ExportRegionDialog.DialogCode.Accepted:
             return

@@ -236,8 +236,12 @@ def test_retention(tmp: Path) -> None:
 
 
 def test_export_dialog_grid(tmp: Path) -> None:
-    """导出对话框里的预览网格：哪些区块导过，导出那一刻就该看见（§6）。"""
-    print("导出对话框的区块预览：")
+    """导出对话框里的区块概览图（§6）：
+
+    默认以"有导出数据的区块"为中心向外 5 格；悬停看坐标，点击看详情；
+    大于视口可以拖动，图太大时只画中间那块并说清楚。
+    """
+    print("导出对话框的区块概览：")
     from app.ui.export_dialog import ExportRegionDialog
 
     world = tmp / "世界"
@@ -246,36 +250,80 @@ def test_export_dialog_grid(tmp: Path) -> None:
     config = AppConfig()
     config.save = lambda path=None: tmp / "app.json"
 
-    def provider(_world, _dimension, x, z):
-        if (x, z) == (0, 0):
-            return "fresh", "导出于 2026-09-14 01:00:00"
-        return "missing", ""
+    def provider(_world, _dimension, cells):
+        return {
+            (x, z): (("fresh", "导出于 2026-09-14 01:00:00　4940 面")
+                     if (x, z) == (0, 0) else ("missing", ""))
+            for x, z in cells
+        }
 
     dialog = ExportRegionDialog(
-        config, None, initial_save=str(world), state_provider=provider
+        config,
+        None,
+        initial_save=str(world),
+        state_provider=provider,
+        exported_provider=lambda _w, _d: [(0, 0)],
     )
-    dialog.mode.setCurrentIndex(2)      # center
     dialog.radius.setValue(1)
     dialog.show()
     QApplication.instance().processEvents()
-    grid = dialog.state_grid
-    check("预览网格显示出来了", grid.isVisible())
+    grid = dialog.state_map.grid
+    check("概览图显示出来了", dialog.state_map.isVisible())
     check("对话框认得出这是个合法存档", dialog.save_status.text().startswith("✓"),
           dialog.save_status.text())
     check("中心那块是已导出", grid.cells.get((0, 0), ("", ""))[0] == "fresh",
           str(grid.cells.get((0, 0))))
     check("旁边的块是未导出", grid.cells.get((1, 1), ("", ""))[0] == "missing")
-    check("3×3 的范围没被截断", grid.truncated is False)
-    dialog.radius.setValue(40)          # 81×81 → 只画左上角
+    check("概览以已导出的区块为中心向外 5 格",
+          (grid.min_x, grid.min_z, grid.count_x, grid.count_z) == (-5, -5, 11, 11),
+          "%s %s %s %s" % (grid.min_x, grid.min_z, grid.count_x, grid.count_z))
+    check("概览尺寸写在标题上（x y 都显示）", "11 × 11" in dialog.grid_size_label.text(),
+          dialog.grid_size_label.text())
+
+    # 悬停 → 坐标与状态
+    dialog._on_grid_hover(0, 0, "区块 (0, 0)：已导出　导出于 2026-09-14 01:00:00")
+    check("悬停显示坐标", "(0, 0)" in dialog.hover_label.text(), dialog.hover_label.text())
+
+    # 点击 → 旁边出详情
+    dialog._on_grid_clicked(0, 0)
+    detail = dialog.detail.text()
+    check("点击显示详情（坐标 + 状态 + 时间 + 面数）",
+          "(0, 0)" in detail and "已导出" in detail and "2026-09-14" in detail
+          and "4940" in detail, detail.replace("\n", " | "))
+    dialog._on_grid_clicked(3, 3)
+    check("点到没导过的块也说明白", "还没有导出过" in dialog.detail.text(),
+          dialog.detail.text().replace("\n", " | "))
+
+    # 范围比视口大：照画不误，靠滚动/拖动看（81×81 = 6561 格也不截断）
+    dialog.radius.setValue(40)
     dialog._sync()
-    check("范围过大时标注被截断", grid.truncated is True)
+    check("81 × 81 也不截断（大了靠拖动看）",
+          dialog.state_map.grid.count_x == 81 and "81 × 81" in dialog.grid_size_label.text(),
+          dialog.grid_size_label.text())
+    check("上下左右都能拖（有滚动条）",
+          dialog.state_map.horizontalScrollBar().maximum() > 0
+          and dialog.state_map.verticalScrollBar().maximum() > 0)
+    before = dialog.state_map.horizontalScrollBar().value()
+    dialog.state_map.grid.panned.emit(-60, 0)
+    check("拖动会平移视图",
+          dialog.state_map.horizontalScrollBar().value() != before,
+          "%s → %s" % (before, dialog.state_map.horizontalScrollBar().value()))
+    # 再大就只画中间那块，并说明（不然一格一格画下来没意义）
+    dialog.radius.setValue(60)
+    dialog._sync()
+    check("超过上限时说明只画中间", "只画了中间" in dialog.grid_size_label.text(),
+          dialog.grid_size_label.text())
     dialog.close()
 
     plain = ExportRegionDialog(config)
     plain.show()
     QApplication.instance().processEvents()
-    check("快速导出不画网格（没有索引可用）", not plain.state_grid.isVisible())
-    check("并说明原因", "项目模式" in plain.grid_legend.text())
+    check("快速导出也画出本次范围的概览",
+          plain.state_map.isVisible() and "11 × 11" in plain.grid_size_label.text(),
+          plain.grid_size_label.text())
+    check("并说明为什么看不到「导过没有」",
+          "快速导出没有导出记录" in plain.grid_legend.text(),
+          plain.grid_legend.text())
     plain.close()
 
 
