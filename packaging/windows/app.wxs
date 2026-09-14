@@ -115,13 +115,16 @@
         <Control Id="LanguageLabel" Type="Text" X="25" Y="60" Width="200" Height="15"
                  Transparent="yes" NoPrefix="yes" Text="语言：" />
         <Control Id="LanguageRadio" Type="RadioButtonGroup" Property="APP_LANGUAGE"
-                 X="25" Y="78" Width="240" Height="96">
+                 X="25" Y="78" Width="240" Height="152">
           <RadioButtonGroup Property="APP_LANGUAGE">
             <RadioButton Value="follow" Text="跟随系统" X="0" Y="0" Width="240" Height="16" />
-            <RadioButton Value="zh_CN" Text="简体中文" X="0" Y="18" Width="240" Height="16" />
-            <RadioButton Value="en" Text="English" X="0" Y="36" Width="240" Height="16" />
-            <RadioButton Value="ja" Text="日本語" X="0" Y="54" Width="240" Height="16" />
-            <RadioButton Value="ko" Text="한국어" X="0" Y="72" Width="240" Height="16" />
+            <RadioButton Value="zh-Hans" Text="简体中文" X="0" Y="18" Width="240" Height="16" />
+            <RadioButton Value="zh-Hant" Text="繁體中文" X="0" Y="36" Width="240" Height="16" />
+            <RadioButton Value="en" Text="English" X="0" Y="54" Width="240" Height="16" />
+            <RadioButton Value="ja" Text="日本語" X="0" Y="72" Width="240" Height="16" />
+            <RadioButton Value="ko" Text="한국어" X="0" Y="90" Width="240" Height="16" />
+            <RadioButton Value="de" Text="Deutsch" X="0" Y="108" Width="240" Height="16" />
+            <RadioButton Value="fr" Text="Français" X="0" Y="126" Width="240" Height="16" />
           </RadioButtonGroup>
         </Control>
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"

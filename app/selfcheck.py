@@ -82,6 +82,27 @@ def _bundled_data() -> str:
     return "%d 项" % len(BUNDLED_DATA)
 
 
+def _language_tables() -> str:
+    """每种界面语言的表都真加载一遍（动态 import，PyInstaller 看不见这条边）。
+
+    漏收集时的症状很隐蔽：日志写着"界面语言: ja"，界面却还是中文 —— 只自检
+    "能不能 import" 是查不出来的，得把每张表都装进内存看它非空。
+    """
+
+    from . import i18n
+
+    codes = [code for code in i18n.codes() if code != i18n.SOURCE]
+    empty = []
+    for code in codes:
+        i18n.set_language(code)
+        if not i18n.table():
+            empty.append(code)
+    i18n.set_language(i18n.SOURCE)
+    if empty:
+        raise RuntimeError("这些语言的表是空的：%s" % "、".join(empty))
+    return "%d 种语言" % len(codes)
+
+
 def _reader() -> str:
     """CLI 在不在。形态 A（瘦客户端）本来就没有，所以不算失败。"""
 
@@ -107,6 +128,7 @@ def _gui() -> str:
 CHECKS = (
     ("ltgen 模块", _ltgen_modules),
     ("工具脚本（按路径加载）", _tool_scripts),
+    ("界面语言表", _language_tables),
     ("随包只读数据", _bundled_data),
     ("库 CLI", _reader),
     ("Qt", _gui),

@@ -407,6 +407,10 @@ def pyinstaller_command(name: str, with_reader: bool) -> list[str]:
         # ltgen 整个包都要：tools/*.py 里 import 了 ltgen.console / manifest / tint，
         # 而那些脚本是运行时按路径加载的，静态分析看不到（见 tool_hidden_imports）。
         "--collect-submodules", "ltgen",
+        # 语言表是**动态 import** 的（`app.i18n_data.<代码>`，代码是运行时算出来的），
+        # PyInstaller 的静态分析看不见 → 漏收集时表现是"切了语言、日志也说切了，
+        # 界面还是中文"。这里显式整包收进去。
+        "--collect-submodules", "app.i18n_data",
     ]
     for module in tool_hidden_imports():
         command += ["--hidden-import", module]

@@ -160,4 +160,12 @@ def _load(code: str) -> None:
         module = importlib.import_module(module_name)
         _tables[code] = dict(getattr(module, "STRINGS", {}))
     except Exception:          # 数据文件缺失/写坏了也不该让应用起不来
+        # 但**要留下痕迹**：打包时漏收集语言表就是这样——日志说"切成了日语"，
+        # 界面却还是中文，只看界面根本猜不到是语言表没进包。
         _tables[code] = {}
+        try:
+            from .applog import logger
+
+            logger().warning("语言表 %s 加载失败（%s），界面将退回简体中文", code, module_name)
+        except Exception:
+            pass
