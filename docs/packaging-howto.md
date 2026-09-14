@@ -142,10 +142,30 @@ python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader
    （自包含，用户双击的就是它）和 `LittleTilesReader/`（裸 onedir，`.app` 就是从它拼出来的）。
    两份内容是重复的，都发出去 = Qt 打两遍、体积翻倍，所以只搬 `.app`；
 4. 把 CLI 拷进包根，**并修好它的动态库依赖**（见下方"动态库为什么要改"）；
-5. 拷 `LICENSE`、`THIRD-PARTY.md`、`README-unsigned.md`、
+5. 显式收集"运行时才 import"的模块（`--collect-submodules ltgen` +
+   扫 `tools/` 那几个运行时脚本的依赖），见下方"为什么会有这一步"；
+6. 拷 `LICENSE`、`THIRD-PARTY.md`、`README-unsigned.md`、
    `GPL-3.0.txt`、`LGPL-3.0.txt`、`OFL.txt`；
-6. 做一次 ad-hoc 签名（macOS，改过 Mach-O 之后必须重签，否则 arm64 上直接被杀）；
-7. 打 zip（macOS 用 `ditto`）并打印 **SHA-256**。
+7. 做一次 ad-hoc 签名（macOS，改过 Mach-O 之后必须重签，否则 arm64 上直接被杀）；
+8. 打 zip（macOS 用 `ditto`）并打印 **SHA-256**。
+
+### 为什么会有"显式收集运行时模块"这一步
+
+`app/generators.py` 是**按文件路径**加载 `tools/*.py` 的（`importlib`），
+PyInstaller 顺着 import 图爬，爬不到那条边。于是那些脚本里 `from ltgen.console
+import enable_utf8_output` 就成了漏网的依赖——真机上表现为
+**构建一切正常、点「重新组合素材」才报 `No module named ltgen.console`**。
+
+两道保险：
+
+* `--collect-submodules ltgen` 把整个包收全（`console` / `manifest` / `tint` 都进来）；
+* `tool_hidden_imports()` 扫 `app/generators.py::TOOL_NAMES` 里那几个脚本的所有
+  import，转成 `--hidden-import`（以后脚本里加了 `numpy` 之类会自动跟上）。
+  只扫这几个是有意的：`tools/` 下还有 `build_app.py` / `make_app_icon.py` 这种
+  **只在打包机器上跑**的脚本，它们 import 的 PyInstaller 不能跟着进包。
+
+验收靠第 4 节第 0 步的 `--self-check`：它会把 `ltgen.*` 全 import 一遍、
+再把三个工具脚本按路径真加载一遍。缺哪个直接报名字。
 
 ### 动态库为什么要改（真机踩到）
 
@@ -231,6 +251,18 @@ dist/app/LittleTilesReader-<版本>-<平台>.zip   ← 上传这个
 
 ## 4. 打包后必须过的自检（别跳）
 
+**第 0 步，先跑这条**（打包后立刻，不用开界面）：
+
+```sh
+dist/app/LittleTilesReader-<版本>-<平台>/LittleTilesReader.app/Contents/MacOS/LittleTilesReader --self-check
+# 期望最后一行：结果：全部通过，可以发（退出码 0）
+```
+
+它验的是"**运行时才 import** 的东西"——`app/generators.py` 按路径加载
+`tools/*.py`，那些脚本又 import `ltgen.console` 等，PyInstaller 的静态分析看不见
+这一层，漏一个模块照样构建成功、点下去才报错（v0.1.0 的「重新组合素材」就这么坏过）。
+Windows 上同理：`...\LittleTilesReader\LittleTilesReader.exe --self-check`。
+
 **在真机上**解压 zip、把 `.app` 拖进「应用程序」，然后按顺序点：
 
 1. 首次打开（macOS 会拦一次，照 `README-unsigned.md` 放行）→ **接着应弹出许可协议**，
@@ -306,6 +338,7 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 
 | 现象 | 原因 / 处理 |
 |---|---|
+| 打包版点「导入素材 / 重新组合素材」报 `No module named ltgen.xxx` | 漏收集：`tools/*.py` 是运行时按路径加载的，静态分析看不到它们的 import。`tools/build_app.py` 现在用 `--collect-submodules ltgen` + `tool_hidden_imports()` 扫 `app/generators.py::TOOL_NAMES` 里那几个脚本的依赖。**加新工具脚本就同步 TOOL_NAMES**，然后跑 `--self-check` 复验 |
 | 启动就退、日志里 `ImportError: attempted relative import with no known parent package` | 入口被改回 `app/__main__.py` 了。入口必须是 `packaging/entry.py`（见上一节） |
 | 启动就退、日志里 `ModuleNotFoundError` | PyInstaller 没收集到某个模块：把它加进 `--hidden-import`（改 `tools/build_app.py` 的 `command`），或先在本机 `python -m app` 跑一遍确认不是代码问题 |
 | 构建早期报 `Unable to find '…/build/app/app/resources'` | `--add-data` 的源路径写成相对路径了：`--specpath` 指向 `build/app`，相对路径会被当成相对它解析。脚本里已改成绝对路径 |

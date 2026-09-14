@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -112,6 +113,41 @@ def write_buildinfo() -> None:
     print("构建信息：%s" % target.relative_to(ROOT))
 
 
+#: `tools/*.py` 里的 import 语句（`from x import y` / `import x.y` 都算）。
+_IMPORT_PATTERN = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][\w.]*)", re.MULTILINE)
+
+def tool_hidden_imports() -> list[str]:
+    """扫运行时加载的工具用到哪些模块，转成 `--hidden-import`。
+
+    这些脚本是**运行时按路径**加载的（`app/generators.py` 用 `importlib`），
+    PyInstaller 的静态分析看不到它们依赖什么。真机上就踩过一次：
+    打包版点「重新组合素材」直接
+    `No module named ltgen.console`——因为只有被 app 自己 import 的
+    `ltgen.paths` / `ltgen.lint` 进了包。
+
+    标准库与 `tools/` 自己的兄弟模块（脚本会把 `tools/` 塞进 sys.path）不用管；
+    `ltgen` 交给 `--collect-submodules`，`app` 是静态收集的，都不重复列。
+    """
+
+    # 只扫"应用运行时会加载"的那几个（单一事实来源在 app/generators.py）：
+    # tools/ 下还有 build_app.py / make_app_icon.py 这种只在打包机器上跑的脚本，
+    # 它们 import 的 PyInstaller 之类不能跟着进包。
+    from app.generators import TOOL_NAMES
+
+    local = {path.stem for path in (ROOT / "tools").glob("*.py")}
+    found: set[str] = set()
+    for name in TOOL_NAMES:
+        path = ROOT / "tools" / ("%s.py" % name)
+        if not path.is_file():
+            continue
+        for name in _IMPORT_PATTERN.findall(path.read_text(encoding="utf-8")):
+            top = name.split(".")[0]
+            if top in local or top in ("ltgen", "app") or top in sys.stdlib_module_names:
+                continue
+            found.add(name)
+    return sorted(found)
+
+
 def pyinstaller_command(name: str, with_reader: bool) -> list[str]:
     """拼 PyInstaller 参数（用命令行而不是 .spec：参数一眼能看全，便于复查）。"""
 
@@ -122,7 +158,12 @@ def pyinstaller_command(name: str, with_reader: bool) -> list[str]:
         "--distpath", str(SCRATCH),
         "--workpath", str(BUILD),
         "--specpath", str(BUILD),
+        # ltgen 整个包都要：tools/*.py 里 import 了 ltgen.console / manifest / tint，
+        # 而那些脚本是运行时按路径加载的，静态分析看不到（见 tool_hidden_imports）。
+        "--collect-submodules", "ltgen",
     ]
+    for module in tool_hidden_imports():
+        command += ["--hidden-import", module]
     if sys.platform == "darwin":
         command += ["--osx-bundle-identifier", "work.inception.littletiles-reader"]
     for relative, target in DATA:

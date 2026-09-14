@@ -26,6 +26,11 @@ from .config import bundle_root
 _TOOLS = "tools"
 _loaded: dict[str, object] = {}
 
+#: 运行时会被加载的工具脚本（**单一事实来源**：自检与打包脚本都读这里）。
+#: 打包时必须把这些脚本用到的模块显式收集，否则冻结版点下去才报
+#: `No module named ltgen.console`（见 `app/selfcheck.py` 与 tools/build_app.py）。
+TOOL_NAMES = ("add_mod_textures", "build_assets_from_pack", "resolve_block_textures")
+
 
 def tool_path(name: str) -> Path:
     """`tools/<name>.py` 的实际位置（打包后在解包目录里）。"""

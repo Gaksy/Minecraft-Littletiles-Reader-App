@@ -15,6 +15,13 @@ from .ui.main_window import MainWindow
 
 
 def main() -> int:
+    # 打包后的自检（`--self-check`）：不建窗口、不写日志，跑完就退。
+    # 它验的是"运行时才 import 的东西"，见 app/selfcheck.py。
+    if "--self-check" in sys.argv:
+        from .selfcheck import run
+
+        return run()
+
     app_config = AppConfig.load()
     path = start_session(data_dir(), __version__)
     app = QApplication(sys.argv)
