@@ -168,11 +168,17 @@ def copy_docs(target_dir: Path, with_reader: bool = False) -> None:
     fonts_license = ROOT / "app" / "resources" / "fonts" / "OFL.txt"
     if fonts_license.is_file():
         shutil.copy2(fonts_license, target_dir / "OFL.txt")
+    # 许可全文：LGPL（Qt）与 OFL（字体）**任何形态都要带**；
+    # GPL / BSL / zlib 是库那边的，只在"含库完整包"时需要（docs/licenses.md）
+    licenses_dir = ROOT / "packaging" / "licenses"
+    always = ["LGPL-3.0.txt"]
     if with_reader:
-        # 形态 B：分发包含 CGAL 的 GPL 代码，必须带上 GPL 全文（docs/licenses.md）
-        licenses = ROOT / "packaging" / "licenses"
-        for text in sorted(licenses.glob("*.txt")):
-            shutil.copy2(text, target_dir / text.name)
+        always += ["GPL-3.0.txt", "BSL-1.0.txt", "zlib.txt"]
+    (target_dir / "licenses").mkdir(exist_ok=True)
+    for name in always:
+        source = licenses_dir / name
+        if source.is_file():
+            shutil.copy2(source, target_dir / "licenses" / name)
 
 
 def zip_dir(folder: Path) -> Path:

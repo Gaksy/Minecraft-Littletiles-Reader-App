@@ -576,4 +576,30 @@ STRINGS = {
     '惯用语言': 'Preferred language',
     '回复直接用中文，不需要翻译。': 'Replies are written directly in Chinese — no translation needed.',
     '回复会按这个语言给出翻译（AI 翻译），并附中文原文供对照。': 'Replies will be translated into this language (by AI), with the Chinese original attached.',
+
+    # ---- 首次启动的许可协议 ----
+    '许可协议': 'Licence agreement',
+    '首次使用前，请阅读并同意以下许可协议': 'Please read and accept these licences before first use',
+    '本应用自身以 MIT 发布；分发包里还包含第三方组件（含 GPL / LGPL / OFL 等），它们的许可同样适用于对应部分。': 'This app itself is MIT-licensed; the distribution also contains third-party components (GPL / LGPL / OFL etc.) whose licences apply to those parts.',
+    '组件与许可': 'Components and licences',
+    '应用本体': 'App itself',
+    '含库完整包': 'Full package with the library',
+    '许可全文': 'Full licence text',
+    '我已阅读并同意上述许可条款（MIT 及第三方组件各自的许可）': 'I have read and accept these licences (MIT and each third-party licence)',
+    '同意并继续': 'Agree and continue',
+    '不同意并退出': 'Decline and quit',
+    '（包里没有找到许可文本，请检查安装是否完整）': '(No licence text found in the package — please check the installation)',
+
+    # ---- 许可弹窗里的组件名与说明 ----
+    'LittleTiles Reader（本应用自身代码）': "LittleTiles Reader (this app's own code)",
+    '应用与生成端由本项目独立开发，源码在 GitHub 上公开。': 'The app and the generation tools are developed here; source code is public on GitHub.',
+    '桌面界面框架，动态链接使用；你有权替换 Qt 库。': 'Desktop UI framework, used via dynamic linking; you may replace the Qt libraries.',
+    '界面像素字体，随包分发（保留字体名，未做修改）。': 'Pixel UI font, redistributed as-is (reserved font name kept, no modification).',
+    '几何计算库——因为编译进了导出器，**这个分发包整体按 GPL-3.0 分发**。': 'Geometry library — because it is compiled into the exporter, **this distribution as a whole is under GPL-3.0**.',
+    '读写 Minecraft NBT 数据，动态链接使用。': 'Reads and writes Minecraft NBT data, used via dynamic linking.',
+    'C++ 基础库（文件流、JSON）。': 'C++ utility libraries (file streams, JSON).',
+    '解压存档与素材包里的压缩数据。': 'Decompresses the compressed data in saves and asset packs.',
+
+    # ---- 许可弹窗：字体组件名 ----
+    'Fusion Pixel 字体': 'Fusion Pixel font',
 }

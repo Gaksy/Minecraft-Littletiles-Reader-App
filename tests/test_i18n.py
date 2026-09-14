@@ -50,6 +50,7 @@ from app.ui.delete_project import DeleteProjectDialog  # noqa: E402
 from app.ui.project_wizard import NewProjectWizard  # noqa: E402
 from app.ui.reset_dialog import ResetDataDialog  # noqa: E402
 from app.ui.my_feedback_dialog import MyFeedbackDialog  # noqa: E402
+from app.ui.license_dialog import LicenseDialog  # noqa: E402
 from app.ui.report_dialog import ReportDialog  # noqa: E402
 from app.ui.update_dialog import UpdateDialog  # noqa: E402
 from app.update import UpdateInfo  # noqa: E402
@@ -183,6 +184,7 @@ def main() -> int:
             "删除项目": lambda: DeleteProjectDialog(str(project.path), project),
             "反馈问题": lambda: ReportDialog(config, root, None, client=_offline_client()),
             "我的反馈": lambda: MyFeedbackDialog(root, None, client=_offline_client()),
+            "许可协议": lambda: LicenseDialog(),
             "检查更新": lambda: UpdateDialog(
                 UpdateInfo(current="0.1.0", latest="v0.9.0", has_update=True,
                            platform="macos-arm", url="https://example.invalid/a.zip",

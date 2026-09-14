@@ -559,4 +559,30 @@ STRINGS = {
     '惯用语言': 'Bevorzugte Sprache',
     '回复直接用中文，不需要翻译。': 'Antworten kommen direkt auf Chinesisch – keine Übersetzung nötig.',
     '回复会按这个语言给出翻译（AI 翻译），并附中文原文供对照。': 'Antworten werden in diese Sprache übersetzt (KI-Übersetzung), mit chinesischem Original.',
+
+    # ---- 首次启动的许可协议 ----
+    '许可协议': 'Lizenzvereinbarung',
+    '首次使用前，请阅读并同意以下许可协议': 'Bitte vor der ersten Nutzung diese Lizenzen lesen und akzeptieren',
+    '本应用自身以 MIT 发布；分发包里还包含第三方组件（含 GPL / LGPL / OFL 等），它们的许可同样适用于对应部分。': 'Die App selbst ist MIT-lizenziert; die Distribution enthält auch Drittanbieter-Komponenten (GPL / LGPL / OFL usw.), deren Lizenzen für diese Teile gelten.',
+    '组件与许可': 'Komponenten und Lizenzen',
+    '应用本体': 'Die App selbst',
+    '含库完整包': 'Vollpaket mit der Bibliothek',
+    '许可全文': 'Vollständiger Lizenztext',
+    '我已阅读并同意上述许可条款（MIT 及第三方组件各自的许可）': 'Ich habe diese Lizenzen (MIT und jeweilige Drittanbieter-Lizenzen) gelesen und akzeptiere sie',
+    '同意并继续': 'Zustimmen und fortfahren',
+    '不同意并退出': 'Ablehnen und beenden',
+    '（包里没有找到许可文本，请检查安装是否完整）': '(Keine Lizenztexte im Paket gefunden – Installation prüfen)',
+
+    # ---- 许可弹窗里的组件名与说明 ----
+    'LittleTiles Reader（本应用自身代码）': 'LittleTiles Reader (eigener Code dieser App)',
+    '应用与生成端由本项目独立开发，源码在 GitHub 上公开。': 'App und Generierungswerkzeuge stammen aus diesem Projekt; Quellcode ist auf GitHub öffentlich.',
+    '桌面界面框架，动态链接使用；你有权替换 Qt 库。': 'Desktop-UI-Framework, dynamisch gelinkt; die Qt-Bibliotheken dürfen ersetzt werden.',
+    '界面像素字体，随包分发（保留字体名，未做修改）。': 'Pixel-Schrift für die Oberfläche, unverändert weitergegeben (Reserved Font Name bleibt).',
+    '几何计算库——因为编译进了导出器，**这个分发包整体按 GPL-3.0 分发**。': 'Geometriebibliothek – da in den Exporter kompiliert, steht **diese Distribution insgesamt unter GPL-3.0**.',
+    '读写 Minecraft NBT 数据，动态链接使用。': 'Liest/schreibt Minecraft-NBT-Daten, dynamisch gelinkt.',
+    'C++ 基础库（文件流、JSON）。': 'C++-Basibibliotheken (Dateistreams, JSON).',
+    '解压存档与素材包里的压缩数据。': 'Entpackt komprimierte Daten in Spielständen und Materialpaketen.',
+
+    # ---- 许可弹窗：字体组件名 ----
+    'Fusion Pixel 字体': 'Fusion Pixel (Schrift)',
 }

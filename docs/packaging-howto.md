@@ -127,11 +127,26 @@ dist/app/LittleTilesReader-<版本>-<平台>.zip   ← 上传这个
 
 ---
 
+## 3.5 首次启动的许可协议（用户必须同意）
+
+打包版第一次启动会先弹**许可协议**：左边列出组件与许可（应用自身 MIT、Qt LGPL、
+字体 OFL、CGAL GPL、libnbt++ LGPL、Boost BSL、zlib），右边可翻阅全文，
+勾选「我已阅读并同意」之后「同意并继续」才可点；点「不同意并退出」或直接关窗口 = 拒绝，
+进程直接退出（不会进主界面）。
+
+- 同意结果写进 `config/app.json`（`licenses_version` + `licenses_accepted_at`），
+  之后不再打扰；**协议集合变了**（改 `app/licenses.py` 的 `LICENSE_SET_VERSION`）会重新问一次；
+- 随包必须带全文（脚本已经处理）：`LICENSE`、`THIRD-PARTY.md`、`licenses/LGPL-3.0.txt`
+  总是带；含库的完整包再加 `licenses/GPL-3.0.txt`、`BSL-1.0.txt`、`zlib.txt`；
+  字体许可 `OFL.txt` 与字体放在一起；
+- 自检请务必验一条：**首次启动确实弹了、不勾选点不动同意、拒绝后进程退出**。
+
 ## 4. 打包后必须过的自检（别跳）
 
 **在真机上**解压 zip、把 `.app` 拖进「应用程序」，然后按顺序点：
 
-1. 首次打开（macOS 会拦一次，照 `README-unsigned.md` 放行）；
+1. 首次打开（macOS 会拦一次，照 `README-unsigned.md` 放行）→ **接着应弹出许可协议**，
+   勾选后才能继续；再启动一次**不应**重复弹；
 2. 界面上「帮助 → 检查更新」能连上服务器（没配版本号时显示"还没发布"）；
 3. 快速导出：选一个存档 → 选区块 → 导出 OBJ（**这一步就是验证"库随包、开箱即用"**）；
 4. 项目模式：新建项目向导（存档目录必填）→ 导出 → 导出概览 → 打包成 zip；

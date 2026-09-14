@@ -559,4 +559,30 @@ STRINGS = {
     '惯用语言': 'Langue préférée',
     '回复直接用中文，不需要翻译。': 'Les réponses restent en chinois — aucune traduction nécessaire.',
     '回复会按这个语言给出翻译（AI 翻译），并附中文原文供对照。': "Les réponses seront traduites dans cette langue (par IA), avec l'original chinois.",
+
+    # ---- 首次启动的许可协议 ----
+    '许可协议': 'Contrat de licence',
+    '首次使用前，请阅读并同意以下许可协议': 'Veuillez lire et accepter ces licences avant la première utilisation',
+    '本应用自身以 MIT 发布；分发包里还包含第三方组件（含 GPL / LGPL / OFL 等），它们的许可同样适用于对应部分。': "L'application elle-même est sous MIT ; la distribution contient aussi des composants tiers (GPL / LGPL / OFL, etc.) dont les licences s'appliquent.",
+    '组件与许可': 'Composants et licences',
+    '应用本体': "L'application",
+    '含库完整包': 'Pack complet avec la bibliothèque',
+    '许可全文': 'Texte complet de la licence',
+    '我已阅读并同意上述许可条款（MIT 及第三方组件各自的许可）': "J'ai lu et j'accepte ces licences (MIT et licences tierces)",
+    '同意并继续': 'Accepter et continuer',
+    '不同意并退出': 'Refuser et quitter',
+    '（包里没有找到许可文本，请检查安装是否完整）': "(Aucun texte de licence trouvé dans le paquet — vérifiez l'installation)",
+
+    # ---- 许可弹窗里的组件名与说明 ----
+    'LittleTiles Reader（本应用自身代码）': 'LittleTiles Reader (code de cette app)',
+    '应用与生成端由本项目独立开发，源码在 GitHub 上公开。': "L'application et les outils sont développés ici ; le code source est public sur GitHub.",
+    '桌面界面框架，动态链接使用；你有权替换 Qt 库。': "Framework d'interface, lié dynamiquement ; vous pouvez remplacer les bibliothèques Qt.",
+    '界面像素字体，随包分发（保留字体名，未做修改）。': "Police pixel d'interface, redistribuée telle quelle (nom réservé conservé).",
+    '几何计算库——因为编译进了导出器，**这个分发包整体按 GPL-3.0 分发**。': "Bibliothèque de géométrie — compilée dans l'exportateur, **cette distribution est donc sous GPL-3.0**.",
+    '读写 Minecraft NBT 数据，动态链接使用。': 'Lecture/écriture des données NBT, lié dynamiquement.',
+    'C++ 基础库（文件流、JSON）。': 'Bibliothèques C++ de base (flux de fichiers, JSON).',
+    '解压存档与素材包里的压缩数据。': 'Décompresse les données des sauvegardes et des packs.',
+
+    # ---- 许可弹窗：字体组件名 ----
+    'Fusion Pixel 字体': 'Police Fusion Pixel',
 }
