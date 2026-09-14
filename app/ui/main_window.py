@@ -41,6 +41,7 @@ from ..project import Project
 from ..sources import ARCHIVE_SUFFIXES, resolve_source
 from ..compose import ComposeError, compose
 from ..library import Library
+from ..library_probe import probe as probe_library
 from ..storage import human_size
 from ..vanilla import build_package_from_resolved, detect_kind
 from .export_panel import ExportPanel
@@ -52,7 +53,6 @@ from .illustration_dialog import IllustrationDialog
 from .project_list import ProjectListWidget
 from .project_window import ProjectWindow
 from .snbt_source import choose_snbt_source, save_pasted_snbt
-from .widgets import wrap
 
 
 def open_directory(path: Path) -> bool:
@@ -152,7 +152,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LittleTiles Reader")
         self.resize(980, 760)
         self.config = config
-        self._library_version = ""   # 由 start 事件带回
+        # 启动就问一次库版本（不用先导出一次）；导出时 start 事件会再报一次同样的值
+        self._library_version = probe_library(self._cli_path())
         self._faded_in = False
         # 打开的项目窗口留一份引用：不然会被 GC 掉，看起来就是"一闪而过"
         self._project_windows: list[ProjectWindow] = []
@@ -218,7 +219,7 @@ class MainWindow(QMainWindow):
         )
         layout.setSpacing(design.METRICS.gap_md)
 
-        layout.addWidget(design.title("要做什么？"))
+        layout.addWidget(design.title("快速导出"))
 
         buttons = QHBoxLayout()
         buttons.setSpacing(design.METRICS.gap_md)
@@ -233,16 +234,8 @@ class MainWindow(QMainWindow):
         self.btn_snbt.clicked.connect(self._export_snbt)
         self.btn_region.clicked.connect(self._export_region)
 
-        self.hint = design.hint(
-            "上面两个是快速导出：不绑定项目、不记录历史。"
-            "想留记录、留素材副本、以后还能查「哪块导过」，就用下面的项目。"
-        )
-        wrap(self.hint)
-        layout.addWidget(self.hint)
-
         self.projects = ProjectListWidget(self.config, self)
         self.projects.opened.connect(self._open_project)
-        self.projects.deleted.connect(self._on_project_deleted)
         layout.addWidget(self.projects, 1)
 
         # 进度、取消、打开输出目录、日志 = 一块面板（主界面与项目界面共用）
@@ -528,32 +521,29 @@ class MainWindow(QMainWindow):
         self._project_windows = [w for w in self._project_windows if w is not window]
         self.projects.refresh()
 
-    def _on_project_deleted(self, directory: str) -> None:
-        """项目目录被删了：把还开着的那个窗口关掉——不然它会继续往不存在的目录写。"""
-
-        for window in list(self._project_windows):
-            if str(window.project.path) == str(Path(directory)):
-                logger().info("项目目录已被删除，关闭其窗口：%s", directory)
-                window.close()
-        self.panel.log_line("项目已删除：%s" % directory)
-
     def _show_about(self) -> None:
         from .. import __version__
         from ..applog import session_path
 
+        # 还没问到版本（CLI 换过位置 / 启动时不可用）就现场再问一次
+        if not self._library_version:
+            self._library_version = probe_library(self._cli_path())
+        text = (
+            "LittleTiles Reader\n\n"
+            + i18n.tr("界面版本：%s\n库版本：%s\n\n")
+            + i18n.tr("提交：%s\n\n")
+            + i18n.tr("会话日志：\n%s\n\n")
+            + i18n.tr("素材来自本机游戏与资源包，本工具只读取、不附带、不分发。")
+        )
         QMessageBox.information(
             self,
-            "关于",
-            "LittleTiles Reader\n\n"
-            "界面版本：%s\n库版本：%s\n\n"
-            "提交：%s\n\n"
-            "会话日志：\n%s\n\n"
-            "素材来自本机游戏与资源包，本工具只读取、不附带、不分发。"
+            i18n.tr("关于"),
+            text
             % (
                 __version__,
-                self._library_version or "（本次还没导出过）",
+                self._library_version or i18n.tr("（没问到库版本）"),
                 self._git_revision(),
-                session_path() or "（未启用日志）",
+                session_path() or i18n.tr("（未启用日志）"),
             ),
         )
 

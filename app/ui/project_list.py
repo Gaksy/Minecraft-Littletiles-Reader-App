@@ -1,4 +1,4 @@
-"""启动界面的项目列表：卡片（封面 · 名称 · 描述）+ 新建 / 添加 / 重定位 / 删除。
+"""启动界面的项目列表：一行一个项目（封面 · 名称 · 描述 · 目录）+ 新建 / 添加。
 
 项目目录是用户自己挑的，所以列表来自**登记表**（应用配置里），不是扫目录树；
 卡片内容以项目里的 `project.json` 为准（项目可能被搬到别的地方）。
@@ -6,30 +6,27 @@
 三种卡片：
 
 * 正常：点一下进项目
-* 项目不可用（`project.json` 读不到，多半是目录被搬走/删了）：给「重新定位」与
-  「删除项目」——**不自动删登记**，用户的东西不该被程序悄悄丢掉
+* 项目不可用（`project.json` 读不到，多半是目录被搬走/删了）：给「重新定位」——
+  **不自动删登记**，用户的东西不该被程序悄悄丢掉
 * 素材绑定失效由项目界面提示，这里不掺和
+
+**删除不在这一页**：卡片是"打开项目"的地方，删除要进到项目里（菜单「项目 → 删除项目」），
+按错了代价太大，不该在启动页一眼就能点到。
 """
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -39,13 +36,12 @@ from .. import i18n
 from ..applog import logger
 from ..config import AppConfig
 from ..project import Project
-from ..storage import dir_size, human_size
 from . import design
 from .widgets import wrap
 
 COVER_SIZE = 72
 CARD_MIN_WIDTH = 250
-COLUMNS = 3
+COLUMNS = 1                 # 一行一个项目：名字和目录都看得全，不用横向找
 
 
 class ProjectCard(QWidget):
@@ -53,7 +49,6 @@ class ProjectCard(QWidget):
 
     opened = Signal(str)        # 项目目录
     relocate = Signal(str)      # 要重新定位的项目目录（原来是哪个）
-    delete_requested = Signal(str)      # 删除项目（怎么删由对话框问）
 
     def __init__(
         self, directory: str, project: Project | None, parent: QWidget | None = None
@@ -80,16 +75,17 @@ class ProjectCard(QWidget):
     # ---- 界面 ------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(design.METRICS.gap_md)
 
-        top = QHBoxLayout()
         self.cover = QLabel()
         self.cover.setFixedSize(COVER_SIZE, COVER_SIZE)
         self.cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        top.addWidget(self.cover, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.cover, 0, Qt.AlignmentFlag.AlignVCenter)
 
         text = QVBoxLayout()
+        text.setSpacing(design.METRICS.gap_xs)
         self.name = QLabel()
         self.name.setFont(QFont("", 11, QFont.Weight.Bold))
         wrap(self.name)
@@ -101,23 +97,14 @@ class ProjectCard(QWidget):
         self.path_label = QLabel()
         wrap(self.path_label)
         text.addWidget(self.path_label)
-        # 不在卡片里留弹性空间：卡片必须贴着内容长，不然被拉高之后
-        # 名称在上、按钮在下，中间空一大片
-        top.addLayout(text, 1)
-        layout.addLayout(top)
+        layout.addLayout(text, 1)
 
-        self.actions = QHBoxLayout()
-        self.actions.setSpacing(design.METRICS.gap_sm)
+        # 卡片上只留"打不开时"才用得上的动作；删除在项目界面里
+        self.actions = QVBoxLayout()
+        self.actions.addStretch(1)
         self.btn_relocate = QPushButton("重新定位")
         self.btn_relocate.clicked.connect(lambda: self.relocate.emit(self.directory))
-        self.btn_delete = QPushButton("删除项目")
-        design.set_variant(self.btn_delete, "danger")
-        self.btn_delete.setToolTip("从列表移除，或者连同项目目录一起删除")
-        self.btn_delete.clicked.connect(
-            lambda: self.delete_requested.emit(self.directory)
-        )
         self.actions.addWidget(self.btn_relocate)
-        self.actions.addWidget(self.btn_delete)
         self.actions.addStretch(1)
         layout.addLayout(self.actions)
 
@@ -137,7 +124,6 @@ class ProjectCard(QWidget):
                 % (design.METRICS.border_width, theme.border, theme.text_3)
             )
             self.btn_relocate.setVisible(True)
-            self.btn_delete.setVisible(True)
             self._paint_border()
             i18n.translate(self)
             return
@@ -165,7 +151,6 @@ class ProjectCard(QWidget):
                 "border:%dpx solid %s;" % (design.METRICS.border_width, theme.border)
             )
         self.btn_relocate.setVisible(False)
-        self.btn_delete.setVisible(True)
         self._paint_border()
         i18n.translate(self)
 
@@ -197,92 +182,10 @@ class ProjectCard(QWidget):
         super().mouseReleaseEvent(event)
 
 
-class _DeleteProjectDialog(QDialog):
-    """删除项目：从列表移除，或者连同项目目录一起删。
-
-    两种后果差别很大，所以放在一个对话框里讲清楚：
-    * 从列表移除：只动应用里的登记，磁盘上的目录一个字节都不碰；
-    * 删除目录：素材副本、贴图库、导出产物、历史记录全没，且**不可恢复**——
-      所以那条选项要额外勾一个确认框才让点「删除」。
-    """
-
-    def __init__(self, directory: str, project: Project | None, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("删除项目")
-        self.setMinimumWidth(520)
-        self.directory = directory
-        self.mode = "forget"
-        path = Path(directory)
-        exists = path.is_dir()
-        size = dir_size(path) if exists else 0
-        name = (project.name if project is not None else "") or path.name or directory
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(design.METRICS.gap_md)
-
-        title = QLabel("要删除「%s」吗？" % name)
-        design.set_role(title, "subtitle")
-        layout.addWidget(title)
-
-        where = QLabel(str(path))
-        wrap(where)
-        design.set_role(where, "dim")
-        layout.addWidget(where)
-
-        self.opt_forget = QRadioButton("仅从项目列表移除（磁盘上的目录保留）")
-        self.opt_forget.setChecked(True)
-        self.opt_purge = QRadioButton(
-            "删除项目目录（释放约 %s）" % human_size(size)
-            if exists
-            else "删除项目目录（这个目录已经不在磁盘上了）"
-        )
-        self.opt_purge.setEnabled(exists)
-        self.opt_forget.toggled.connect(self._sync)
-        layout.addWidget(self.opt_forget)
-        layout.addWidget(self.opt_purge)
-
-        self.confirm = QCheckBox(
-            "我确认永久删除这个目录：素材副本、贴图库、导出产物、历史记录都会一起没有"
-        )
-        self.confirm.setEnabled(False)
-        self.confirm.toggled.connect(self._sync)
-        layout.addWidget(self.confirm)
-
-        if not exists:
-            hint = QLabel("目录不在了，只能把这条登记从列表里删掉。")
-            wrap(hint)
-            design.set_role(hint, "hint")
-            layout.addWidget(hint)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        self.btn_ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
-        self.btn_ok.setText("删除")
-        design.set_variant(self.btn_ok, "danger")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        i18n.translate(self)
-        self._sync()
-
-    def _sync(self) -> None:
-        purge = self.opt_purge.isChecked() and self.opt_purge.isEnabled()
-        self.confirm.setEnabled(purge)
-        if not purge:
-            self.confirm.setChecked(False)
-        self.btn_ok.setEnabled((not purge) or self.confirm.isChecked())
-
-    def accept(self) -> None:
-        self.mode = "purge" if self.opt_purge.isChecked() else "forget"
-        super().accept()
-
-
 class ProjectListWidget(QWidget):
     """项目卡片区 + 新建 / 添加 / 刷新。"""
 
     opened = Signal(str)
-    deleted = Signal(str)       # 项目目录被删掉了（主界面据此关掉开着的窗口）
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -346,7 +249,6 @@ class ProjectListWidget(QWidget):
             card = ProjectCard(directory, project, self.cards_host)
             card.opened.connect(self.opened.emit)
             card.relocate.connect(self._relocate)
-            card.delete_requested.connect(self._delete_project)
             self.cards.addWidget(card, index // COLUMNS, index % COLUMNS)
             # 依次淡入：列表刷新时看得出"这些卡片是刚排好的"
             design.motion.fade_in(card, delay=min(index, 8) * 40)
@@ -388,16 +290,26 @@ class ProjectListWidget(QWidget):
             self.config.save()
             self.refresh()
             return
-        default_name = directory.name or "我的项目"
-        name, ok = QInputDialog.getText(self, "新建项目", "项目名：", text=default_name)
-        if not ok:
+
+        # 配置向导：项目名 → 简介 → 存档目录（必填）→ 封面
+        from .project_wizard import NewProjectWizard
+
+        wizard = NewProjectWizard(self.config, directory, self)
+        if wizard.exec() != NewProjectWizard.DialogCode.Accepted:
             return
+        values = wizard.values()
         try:
-            project = Project.create(directory, name.strip() or default_name)
+            project = Project.create(directory, values["name"])
         except OSError as error:
             QMessageBox.warning(self, "建不了项目", str(error))
             return
+        project.description = values["description"]
+        project.save_root = values["save_root"]
+        project.save()
+        if values["cover"]:
+            project.set_cover(values["cover"])
         self.config.register_project(project.path)
+        self.config.remember_save(values["save_root"])
         self.config.save()
         logger().info("新建项目：%s（%s）", project.name, project.path)
         self.refresh()
@@ -435,40 +347,4 @@ class ProjectListWidget(QWidget):
         self.config.register_project(project.path)
         self.config.save()
         logger().info("项目重新定位：%s → %s", old_directory, project.path)
-        self.refresh()
-
-    def _delete_project(self, directory: str) -> None:
-        """删除项目：只删登记，或者连目录一起删（对话框里选）。"""
-
-        project = Project.load(directory)
-        dialog = _DeleteProjectDialog(directory, project, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        if dialog.mode == "purge":
-            target = Path(directory)
-            # 双保险：只删"确实是一个项目目录"的目录（里面有 project.json），
-            # 免得一个手滑把别的目录递归删了。
-            if not (target / "project.json").is_file():
-                QMessageBox.warning(
-                    self,
-                    "没有删除",
-                    "这个目录里没有 project.json，不像是项目目录，所以没有删除任何东西"
-                    "（登记也保留着）：\n%s\n\n"
-                    "如果只是不想再看到它，选「仅从项目列表移除」。" % target,
-                )
-                return
-            try:
-                shutil.rmtree(target)
-            except OSError as error:
-                logger().exception("删除项目目录失败：%s", target)
-                QMessageBox.warning(self, "删除失败", str(error))
-                return
-            logger().info("删除项目目录：%s", target)
-            self.deleted.emit(str(target))
-        else:
-            logger().info("从项目列表移除：%s", directory)
-
-        self.config.unregister_project(directory)
-        self.config.save()
         self.refresh()

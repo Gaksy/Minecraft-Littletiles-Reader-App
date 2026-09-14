@@ -41,7 +41,7 @@ ALLOW_SAME = {"CLI", "zip", "SNBT", "OBJ"}
 #: 拉丁字母语言才要求"必须不一样"；繁体/日/韩里同形词本来就多（取消、半径…）
 LATIN = ("en", "de", "fr")
 #: 这些键一定要被替换掉才能算"界面真的换语言了"
-MUST_TRANSLATE = ("要做什么？", "新建项目", "添加已有项目", "删除项目", "重新定位")
+MUST_TRANSLATE = ("快速导出", "新建项目", "添加已有项目", "删除项目", "重新定位")
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -113,7 +113,7 @@ def main() -> int:
             leftover = [text for text in texts if text in MUST_TRANSLATE]
             check("%s：该换的都换了" % code, not leftover, str(leftover))
             check("%s：标题换成译文了" % code,
-                  window.findChildren(QLabel)[0].text() != "要做什么？")
+                  window.findChildren(QLabel)[0].text() != "快速导出")
             window.close()
 
         i18n.set_language("en")
@@ -123,13 +123,11 @@ def main() -> int:
         texts = visible_texts(dialog)
         leftover = [text for text in texts if any("\u4e00" <= ch <= "\u9fff" for ch in text)]
         check("en：导出对话框里没有中文残留", not leftover, str(leftover[:3]))
-        check("en：区块概览标题是英文",
-              dialog.grid_size_label.text().startswith("Chunk overview"),
-              dialog.grid_size_label.text())
-        dialog._on_grid_clicked(0, 0)
-        check("en：详情跟着换语言",
-              dialog.detail.text().startswith("Chunk (0, 0)"),
-              dialog.detail.text().replace("\n", " | "))
+        check("en：可选语言的下拉也是英文",
+              dialog.mode.itemText(0) != "单区块",
+              dialog.mode.itemText(0))
+        check("en：本次范围摘要也是英文",
+              "This export" in dialog.summary.text(), dialog.summary.text())
         dialog.close()
 
         # 3) 未知代码安全退回

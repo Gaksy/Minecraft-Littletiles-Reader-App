@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -84,7 +85,7 @@ from ..storage import categories, human_size, percent
 from ..storage import CATEGORY_PATHS
 from ..texture_library import absorb, library_path, orphans, prune
 from .background import run_in_background
-from .chunk_grid import ChunkMapView, ChunkStateGrid
+from .chunk_grid import NO_CELL, ChunkMapView, ChunkStateGrid
 from .export_dialog import ExportRegionDialog
 from .export_panel import ExportPanel
 from .storage_bar import Segment, StorageBar, StorageLegend
@@ -94,6 +95,10 @@ from .widgets import ClickableLabel, wrap
 
 # 封面"清除"的哨兵值：和"没改过（空串）"、"选了新文件（路径）"区分开
 _COVER_CLEAR = "__clear__"
+
+# 导出概览：以"导过的区块"为中心向外几格；单边最多画多少格（再大靠拖动看）
+OVERVIEW_RADIUS = 5
+OVERVIEW_MAX = 96
 
 
 class _BindingPicker(QDialog):
@@ -690,6 +695,7 @@ class ProjectWindow(QMainWindow):
         layout.addWidget(self._build_save_box())
         layout.addWidget(self._build_material_box())
         layout.addWidget(self._build_history_box())
+        layout.addWidget(self._build_overview_box())
         layout.addWidget(self._build_storage_box())
         layout.addStretch(1)
 
@@ -845,7 +851,24 @@ class ProjectWindow(QMainWindow):
         self.history.setMinimumHeight(140)
         self.history.setMaximumHeight(200)      # 同上：表格的 sizeHint 也是 256 起步
         self.history.verticalHeader().setVisible(False)
-        self.history.horizontalHeader().setStretchLastSection(True)
+        # 列宽按内容类型分：时间/类型/数字是固定宽度的短内容，名称与区块会很长、
+        # 让它们吃剩余空间。以前是"内容撑 + 最后一列拉伸"，结果数字列被挤得站不住、
+        # "大小"却吃掉半张表。
+        header = self.history.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(56)
+        for column, mode in (
+            (0, QHeaderView.ResizeMode.Fixed),        # 时间：YYYY-MM-DD HH:MM:SS
+            (1, QHeaderView.ResizeMode.Fixed),        # 类型：存档 / 结构
+            (2, QHeaderView.ResizeMode.Stretch),      # 名称：最长的那个
+            (3, QHeaderView.ResizeMode.Stretch),      # 区块：c12_-3_r1 这类
+            (4, QHeaderView.ResizeMode.Fixed),        # 面数
+            (5, QHeaderView.ResizeMode.Fixed),        # 贴图
+            (6, QHeaderView.ResizeMode.Fixed),        # 大小
+        ):
+            header.setSectionResizeMode(column, mode)
+        for column, width in ((0, 152), (1, 64), (4, 76), (5, 84), (6, 88)):
+            self.history.setColumnWidth(column, width)
         # 选中才有对象的动作要跟着选中状态亮/灭
         self.history.itemSelectionChanged.connect(self._update_history_buttons)
         layout.addWidget(self.history)
@@ -867,6 +890,66 @@ class ProjectWindow(QMainWindow):
             row.addWidget(button)
         row.addStretch(1)
         layout.addLayout(row)
+        return box
+
+    def _build_overview_box(self) -> QGroupBox:
+        """导出概览：这个项目**导过哪些区块**，一张能拖的图（§6、§7.2）。
+
+        与导出对话框里那块不一样：那块画的是"这次要导的范围"，这里画的是
+        **已经导过的记录**——以数据的中心向外 5 格，悬停看坐标，点一格看这一块的
+        详情（什么时候导的、多少面、产物在哪）。图大了能拖着看。
+        """
+
+        box = QGroupBox("导出概览")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(design.METRICS.gap_sm)
+
+        head = QHBoxLayout()
+        head.setSpacing(design.METRICS.gap_sm)
+        head.addWidget(QLabel("维度"))
+        self.overview_dimension = QComboBox()
+        self.overview_dimension.currentIndexChanged.connect(
+            lambda _index: self._refresh_overview()
+        )
+        head.addWidget(self.overview_dimension)
+        self.overview_size = QLabel()
+        design.set_role(self.overview_size, "subtitle")
+        head.addWidget(self.overview_size)
+        legend = QLabel(
+            "灰 = 没导过　绿 = 已导出且存档未变　黄 = 已导出但之后存档变过"
+        )
+        wrap(legend)
+        design.set_role(legend, "hint")
+        head.addWidget(legend, 1)
+        layout.addLayout(head)
+
+        row = QHBoxLayout()
+        row.setSpacing(design.METRICS.gap_sm)
+        self.overview_map = ChunkMapView(cell=18, max_cells=OVERVIEW_MAX)
+        self.overview_map.setMinimumHeight(220)
+        self.overview_map.hovered.connect(self._on_overview_hover)
+        self.overview_map.clicked.connect(self._on_overview_clicked)
+        row.addWidget(self.overview_map, 1)
+
+        detail_card, detail_layout = design.card(padding=design.METRICS.gap_sm)
+        detail_card.setFixedWidth(260)
+        self.overview_detail = QLabel()
+        self.overview_detail.setWordWrap(True)
+        self.overview_detail.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
+        self.overview_detail.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        detail_layout.addWidget(self.overview_detail)
+        detail_layout.addStretch(1)
+        row.addWidget(detail_card, 0)
+        layout.addLayout(row, 1)
+
+        self.overview_hover = QLabel()
+        wrap(self.overview_hover)
+        design.set_role(self.overview_hover, "hint")
+        layout.addWidget(self.overview_hover)
         return box
 
     def _build_storage_box(self) -> QGroupBox:
@@ -916,6 +999,131 @@ class ProjectWindow(QMainWindow):
         for row_index, row in enumerate(self.storage_legend.rows()):
             row.set_dimmed(index >= 0 and index != row_index)
 
+    # ---- 导出概览（这个项目导过哪些区块） --------------------------------
+
+    def _refresh_overview(self) -> None:
+        """画出"导过哪些区块"：以数据为中心向外 5 格，越界不画。"""
+
+        records = [r for r in self.store.records if r.kind == "region" and r.chunks]
+        dimensions: list[str] = []
+        for record in records:              # records 已是新的在前
+            if record.dimension not in dimensions:
+                dimensions.append(record.dimension)
+
+        # 维度下拉：只列真正有记录的维度，尽量保持当前选择
+        current = self.overview_dimension.currentData()
+        self.overview_dimension.blockSignals(True)
+        self.overview_dimension.clear()
+        for dimension in dimensions:
+            self.overview_dimension.addItem(
+                i18n.tr(DIMENSION_LABELS.get(dimension, dimension)), dimension
+            )
+        if dimensions:
+            index = dimensions.index(current) if current in dimensions else 0
+            self.overview_dimension.setCurrentIndex(index)
+        self.overview_dimension.setEnabled(bool(dimensions))
+        self.overview_dimension.blockSignals(False)
+
+        if not dimensions:
+            self.overview_map.setVisible(False)
+            self.overview_size.setText("还没有导出记录")
+            self.overview_hover.setText("")
+            self.overview_detail.setText(
+                "这个项目还没有导出记录。导出一次之后，这里会画出导过哪些区块。"
+            )
+            return
+
+        dimension = self.overview_dimension.currentData()
+        mine = [r for r in records if r.dimension == dimension]
+        cells, self._overview_records = self._overview_cells(dimension, mine)
+        self._overview_cells = cells
+        self.overview_map.setVisible(True)
+
+        keys = list(cells.keys())
+        min_x = min(x for x, _ in keys) - OVERVIEW_RADIUS
+        max_x = max(x for x, _ in keys) + OVERVIEW_RADIUS
+        min_z = min(z for _, z in keys) - OVERVIEW_RADIUS
+        max_z = max(z for _, z in keys) + OVERVIEW_RADIUS
+        count_x = min(max_x - min_x + 1, OVERVIEW_MAX)
+        count_z = min(max_z - min_z + 1, OVERVIEW_MAX)
+        self.overview_map.set_area(min_x, min_z, count_x, count_z, cells)
+        self.overview_size.setText(
+            "共 %d 个区块　范围 %d × %d%s"
+            % (
+                len(cells),
+                max_x - min_x + 1,
+                max_z - min_z + 1,
+                "" if (count_x, count_z) == (max_x - min_x + 1, max_z - min_z + 1)
+                else "（太大，只画中间 %d × %d）" % (count_x, count_z),
+            )
+        )
+        # 让"导过的那些块"落在眼前
+        center_x = (min(x for x, _ in keys) + max(x for x, _ in keys)) // 2
+        center_z = (min(z for _, z in keys) + max(z for _, z in keys)) // 2
+        self.overview_map.center_on_chunk(center_x, center_z)
+        self.overview_hover.setText("把鼠标停在格子上看这一块的坐标与状态。")
+        self.overview_detail.setText("在左边的概览图上点一个区块，这里显示它的详情。")
+
+    def _overview_cells(self, dimension: str, records: list) -> tuple[dict, dict]:
+        """`{(x, z): (状态, 提示)}`：把本项目的记录摊到网格上。
+
+        同一个项目可能对应好几个存档（换过存档根目录），所以按"记录里的世界"
+        分组各算一次三态——都对着当前项目自己的存档比，别拿别的存档的时间戳比。
+        """
+
+        cells: dict = {}
+        latest: dict = {}
+        by_world: dict = {}
+        for record in records:              # 新的在前：先写进去的就是最近那条
+            by_world.setdefault(str(record.world), []).append(record)
+        for world, group in by_world.items():
+            states = self.store.chunk_states(
+                world, dimension, [tuple(chunk) for record in group for chunk in record.chunks]
+            )
+            for (x, z), (state, record) in states.items():
+                if record is None or (x, z) in cells:
+                    continue
+                detail = "导出于 %s" % record.created_at
+                if state != "fresh":
+                    detail += "，存档此后已修改"
+                if record.faces:
+                    detail += "　%d 面" % record.faces
+                cells[(x, z)] = (state, detail)
+                latest[(x, z)] = record
+        return cells, latest
+
+    def _on_overview_hover(self, x: int, z: int, text: str) -> None:
+        if x == NO_CELL:
+            return
+        self.overview_hover.setText(
+            "区块 (%d, %d)：%s" % (x, z, text.split("：", 1)[-1])
+        )
+
+    def _on_overview_clicked(self, x: int, z: int) -> None:
+        """点一格 → 在图的旁边给这一块的详情（哪次导出、多少面、产物在哪）。"""
+
+        if x == NO_CELL:
+            return
+        state, _detail = getattr(self, "_overview_cells", {}).get((x, z), ("missing", ""))
+        found = getattr(self, "_overview_records", {}).get((x, z))
+        if found is None:
+            self.overview_detail.setText(
+                "区块 (%d, %d)\n状态：没导过\n\n这个项目没有这一块的记录。"
+                % (x, z)
+            )
+            return
+        lines = [
+            "区块 (%d, %d)" % (x, z),
+            "状态：%s" % STATE_LABELS.get(state, state),
+            "导出于 %s" % found.created_at,
+            "维度：%s" % DIMENSION_LABELS.get(found.dimension, found.dimension),
+        ]
+        if found.faces:
+            lines.append("面数：%d" % found.faces)
+        lines.append("产物：%s" % found.output_dir)
+        lines.append("记录：%s" % found.id)
+        self.overview_detail.setText("\n".join(lines))
+
     def _build_menu(self) -> None:
         bar = self.menuBar()
 
@@ -928,6 +1136,8 @@ class ProjectWindow(QMainWindow):
         project_menu.addAction("打开项目目录", lambda: self._open_path(self.project.path))
         project_menu.addAction("导出项目配置包", self._export_config)
         project_menu.addAction("从配置包导入到本项目", self._import_config_into)
+        project_menu.addSeparator()
+        project_menu.addAction("删除项目", self._delete_this_project)
         project_menu.addSeparator()
         project_menu.addAction("关闭项目界面", self.close)
 
@@ -955,6 +1165,7 @@ class ProjectWindow(QMainWindow):
         self._refresh_bindings()
         self._refresh_package_status()
         self._refresh_history()
+        self._refresh_overview()
         self._refresh_storage()
         backups = self.project.backups()
         self.backup_label.setText(
@@ -1049,9 +1260,14 @@ class ProjectWindow(QMainWindow):
                 human_size(record.size_bytes(self.project.path)),
             ]
             for column, text in enumerate(values):
-                self.history.setItem(row, column, QTableWidgetItem(text))
+                item = QTableWidgetItem(text)
+                # 数字右对齐：面数/贴图/大小按位对齐才好扫
+                if column in (4, 5, 6):
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                self.history.setItem(row, column, item)
             self.history.item(row, 0).setData(Qt.ItemDataRole.UserRole, record.id)
-        self.history.resizeColumnsToContents()
         self.history.clearSelection()
         self._update_history_buttons()
 
@@ -1116,6 +1332,25 @@ class ProjectWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self._apply_project_config(dialog.values())
+
+    def _delete_this_project(self) -> None:
+        """删除这个项目：问清楚"只移除登记"还是"连目录一起删"，然后关掉本窗口。
+
+        入口放在项目里（不在启动界面的卡片上）：卡片是"打开项目"的地方，
+        删除按错了代价太大，不该在启动页一眼就能点到。
+        """
+
+        from .delete_project import delete_project
+
+        mode = delete_project(self, self.project.path, self.project, self.config)
+        if mode is None:
+            return
+        self.panel.log_line(
+            "项目目录已删除：%s" % self.project.path
+            if mode == "purge"
+            else "已从项目列表移除：%s" % self.project.path
+        )
+        self.close()
 
     def _apply_project_config(self, values: dict) -> None:
         changed = False
@@ -1370,7 +1605,8 @@ class ProjectWindow(QMainWindow):
             initial=self.project.options or self.config.last_export,
             initial_save=self.project.save_root,
             state_provider=self._chunk_states_for_dialog,
-            exported_provider=self._exported_chunks_for_dialog,
+            # 存档位置在项目配置里定好了，这里不给改（改的地方就那一处）
+            save_locked=bool(self.project.save_root),
         )
         if dialog.exec() != ExportRegionDialog.DialogCode.Accepted:
             return

@@ -236,12 +236,12 @@ def test_retention(tmp: Path) -> None:
 
 
 def test_export_dialog_grid(tmp: Path) -> None:
-    """导出对话框里的区块概览图（§6）：
+    """导出对话框里的预览网格：哪些区块导过，导出那一刻就该看见（§6）。
 
-    默认以"有导出数据的区块"为中心向外 5 格；悬停看坐标，点击看详情；
-    大于视口可以拖动，图太大时只画中间那块并说清楚。
+    注意这里画的是**这次要导的范围**里"哪块导过没有"；整个项目"导过哪些区块"
+    的概览在项目界面上（见 test_project_overview）。
     """
-    print("导出对话框的区块概览：")
+    print("导出对话框的区块预览：")
     from app.ui.export_dialog import ExportRegionDialog
 
     world = tmp / "世界"
@@ -252,79 +252,100 @@ def test_export_dialog_grid(tmp: Path) -> None:
 
     def provider(_world, _dimension, cells):
         return {
-            (x, z): (("fresh", "导出于 2026-09-14 01:00:00　4940 面")
+            (x, z): (("fresh", "导出于 2026-09-14 01:00:00")
                      if (x, z) == (0, 0) else ("missing", ""))
             for x, z in cells
         }
 
     dialog = ExportRegionDialog(
-        config,
-        None,
-        initial_save=str(world),
-        state_provider=provider,
-        exported_provider=lambda _w, _d: [(0, 0)],
+        config, None, initial_save=str(world), state_provider=provider
     )
+    dialog.mode.setCurrentIndex(2)      # center
     dialog.radius.setValue(1)
     dialog.show()
     QApplication.instance().processEvents()
-    grid = dialog.state_map.grid
-    check("概览图显示出来了", dialog.state_map.isVisible())
+    grid = dialog.state_grid
+    check("预览网格显示出来了", grid.isVisible())
     check("对话框认得出这是个合法存档", dialog.save_status.text().startswith("✓"),
           dialog.save_status.text())
     check("中心那块是已导出", grid.cells.get((0, 0), ("", ""))[0] == "fresh",
           str(grid.cells.get((0, 0))))
     check("旁边的块是未导出", grid.cells.get((1, 1), ("", ""))[0] == "missing")
-    check("概览以已导出的区块为中心向外 5 格",
-          (grid.min_x, grid.min_z, grid.count_x, grid.count_z) == (-5, -5, 11, 11),
+    check("3×3 的范围没被截断", grid.truncated is False)
+    check("网格画的就是本次范围",
+          (grid.min_x, grid.min_z, grid.count_x, grid.count_z) == (-1, -1, 3, 3),
           "%s %s %s %s" % (grid.min_x, grid.min_z, grid.count_x, grid.count_z))
-    check("概览尺寸写在标题上（x y 都显示）", "11 × 11" in dialog.grid_size_label.text(),
-          dialog.grid_size_label.text())
-
-    # 悬停 → 坐标与状态
-    dialog._on_grid_hover(0, 0, "区块 (0, 0)：已导出　导出于 2026-09-14 01:00:00")
-    check("悬停显示坐标", "(0, 0)" in dialog.hover_label.text(), dialog.hover_label.text())
-
-    # 点击 → 旁边出详情
-    dialog._on_grid_clicked(0, 0)
-    detail = dialog.detail.text()
-    check("点击显示详情（坐标 + 状态 + 时间 + 面数）",
-          "(0, 0)" in detail and "已导出" in detail and "2026-09-14" in detail
-          and "4940" in detail, detail.replace("\n", " | "))
-    dialog._on_grid_clicked(3, 3)
-    check("点到没导过的块也说明白", "还没有导出过" in dialog.detail.text(),
-          dialog.detail.text().replace("\n", " | "))
-
-    # 范围比视口大：照画不误，靠滚动/拖动看（81×81 = 6561 格也不截断）
-    dialog.radius.setValue(40)
+    dialog.radius.setValue(40)          # 81×81 → 只画中间一块
     dialog._sync()
-    check("81 × 81 也不截断（大了靠拖动看）",
-          dialog.state_map.grid.count_x == 81 and "81 × 81" in dialog.grid_size_label.text(),
-          dialog.grid_size_label.text())
-    check("上下左右都能拖（有滚动条）",
-          dialog.state_map.horizontalScrollBar().maximum() > 0
-          and dialog.state_map.verticalScrollBar().maximum() > 0)
-    before = dialog.state_map.horizontalScrollBar().value()
-    dialog.state_map.grid.panned.emit(-60, 0)
-    check("拖动会平移视图",
-          dialog.state_map.horizontalScrollBar().value() != before,
-          "%s → %s" % (before, dialog.state_map.horizontalScrollBar().value()))
-    # 再大就只画中间那块，并说明（不然一格一格画下来没意义）
-    dialog.radius.setValue(60)
-    dialog._sync()
-    check("超过上限时说明只画中间", "只画了中间" in dialog.grid_size_label.text(),
-          dialog.grid_size_label.text())
+    check("范围过大时标注被截断", grid.truncated is True)
     dialog.close()
 
     plain = ExportRegionDialog(config)
     plain.show()
     QApplication.instance().processEvents()
-    check("快速导出也画出本次范围的概览",
-          plain.state_map.isVisible() and "11 × 11" in plain.grid_size_label.text(),
-          plain.grid_size_label.text())
-    check("并说明为什么看不到「导过没有」",
-          "快速导出没有导出记录" in plain.grid_legend.text(),
-          plain.grid_legend.text())
+    check("快速导出不画网格（没有索引可用）", not plain.state_grid.isVisible())
+    check("并说明原因", "项目模式" in plain.grid_legend.text())
     plain.close()
+
+
+def test_project_overview(tmp: Path) -> None:
+    """项目界面上的「导出概览」：这个项目导过哪些区块（以数据为中心向外 5 格）。"""
+    print("项目导出概览：")
+    project = Project.create(tmp / "overview-demo", "海滨小屋")
+    store = RecordStore(project.path)
+    world = tmp / "world"
+    (world / "region").mkdir(parents=True, exist_ok=True)
+    (world / "region" / "r.0.0.mca").write_bytes(b"x" * 100)
+    for index, (x, z) in enumerate(((0, 0), (1, 0), (4, -2))):
+        store.add(
+            ExportRecord(
+                id="2026-09-1%d_0000_c%d_%d_r1" % (index, x, z), kind="region",
+                name="c%d_%d_r1" % (x, z), created_at="2026-09-1%d 00:00:00" % index,
+                output_dir="outputs/x%d" % index, obj="outputs/x%d/m.obj" % index,
+                world=str(world), dimension="overworld", chunks=[[x, z]],
+                faces=100 * (index + 1), textures=[],
+            )
+        )
+    config = AppConfig()
+    config.save = lambda path=None: tmp / "app.json"
+    window = ProjectWindow(project, config, tmp, None)
+    window.resize(1000, 820)
+    window.show()
+    QApplication.instance().processEvents()
+
+    grid = window.overview_map.grid
+    check("概览图显示出来了", window.overview_map.isVisible())
+    check("以导过的区块为中心向外 5 格",
+          (grid.min_x, grid.min_z, grid.count_x, grid.count_z) == (-5, -7, 15, 13),
+          "%s %s %s %s" % (grid.min_x, grid.min_z, grid.count_x, grid.count_z))
+    check("写着导过多少个区块", "共 3 个区块" in window.overview_size.text(),
+          window.overview_size.text())
+    check("维度下拉只列有记录的维度",
+          window.overview_dimension.count() == 1
+          and window.overview_dimension.currentData() == "overworld",
+          "%s" % window.overview_dimension.currentText())
+
+    window.overview_map.hovered.emit(1, 0, "区块 (1, 0)：已导出")
+    check("悬停给出坐标", "(1, 0)" in window.overview_hover.text(),
+          window.overview_hover.text())
+    window.overview_map.clicked.emit(1, 0)
+    detail = window.overview_detail.text()
+    check("点已导过的块给详情（时间 + 产物 + 记录）",
+          "(1, 0)" in detail and "2026-09-11" in detail and "outputs/x1" in detail
+          and "2026-09-11_0000_c1_0_r1" in detail, detail.replace("\n", " | "))
+    window.overview_map.clicked.emit(-4, -4)
+    check("点没导过的块也说明白", "没导过" in window.overview_detail.text(),
+          window.overview_detail.text().replace("\n", " | "))
+
+    empty = Project.create(tmp / "empty-demo", "空项目")
+    bare = ProjectWindow(empty, config, tmp, None)
+    bare.show()
+    QApplication.instance().processEvents()
+    check("没有记录时给一句话说明", "还没有导出记录" in bare.overview_size.text(),
+          bare.overview_size.text())
+    check("没有记录时不画图", not bare.overview_map.isVisible())
+    bare.close()
+    window.close()
 
 
 def test_save_inspection(tmp: Path) -> None:
@@ -757,6 +778,7 @@ def main() -> int:
         test_retention_ui(root / "t4b")
         test_export_dialog_grid(root / "t4c")
         test_save_inspection(root / "t4d")
+        test_project_overview(root / "t4e")
         test_window(root / "t4")
         test_real_export(root / "t5", seen)
     print("弹窗：")

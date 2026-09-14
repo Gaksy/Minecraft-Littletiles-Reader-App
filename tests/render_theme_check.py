@@ -52,34 +52,30 @@ def render_dialog(theme_name: str, path: Path) -> None:
     dialog.grab().save(str(path))
     dialog.close()
 
-    def states(_world, _dimension, cells):
-        result = {}
-        for x, z in cells:
-            if abs(x) <= 2 and abs(z) <= 1:
-                result[(x, z)] = ("fresh", "导出于 2026-09-14 01:00:00　4940 面")
-            elif (x + 2 * z) % 5 == 0:
-                result[(x, z)] = ("stale", "导出于 2026-09-13 22:10:00，存档此后已修改")
-            else:
-                result[(x, z)] = ("missing", "")
-        return result
-
-    # 概览图的颜色要有效果，存档目录得像个真的存档（至少有个 region/）
+    # 再出一张"有导出记录"的：项目模式下网格里出现绿/黄两色
     with tempfile.TemporaryDirectory(prefix="lt-theme-world-") as tmp:
         world = Path(tmp) / "世界"
         (world / "region").mkdir(parents=True)
         (world / "region" / "r.0.0.mca").write_bytes(b"x" * 100)
         (world / "level.dat").write_bytes(b"level")
+
+        def states(_world, _dimension, cells):
+            result = {}
+            for x, z in cells:
+                if abs(x) <= 1 and abs(z) <= 1:
+                    result[(x, z)] = ("fresh", "导出于 2026-09-14 01:00:00")
+                elif (x + 2 * z) % 3 == 0:
+                    result[(x, z)] = ("stale", "导出于 2026-09-13 22:10:00，存档此后已修改")
+                else:
+                    result[(x, z)] = ("missing", "")
+            return result
+
         mapped = ExportRegionDialog(
-            AppConfig(),
-            initial_save=str(world),
-            state_provider=states,
-            exported_provider=lambda _w, _d: [(0, 0), (1, 0), (2, 1)],
+            AppConfig(), initial_save=str(world), state_provider=states
         )
         mapped.resize(1080, 720)
         mapped.show()
         application.processEvents()
-        mapped._on_grid_clicked(1, 0)
-        application.processEvents()      # 点完要过一次布局，截图里才不是半截文字
         mapped.grab().save(str(path.with_name("dialog_map_" + theme_name + ".png")))
         mapped.close()
 
@@ -105,16 +101,22 @@ def render_project(theme_name: str, path: Path) -> None:
         (project.path / "inputs" / "saves" / "2026-09-14_0040_house.zip").write_bytes(b"z" * 90000)
         (project.path / "textures" / "ab").mkdir(parents=True, exist_ok=True)
         (project.path / "textures" / "ab" / "abcdef.png").write_bytes(b"p" * 60000)
-        RecordStore(project.path).add(
-            ExportRecord(
-                id="2026-09-14_0031_c12_-3_r1", kind="region", name="c12_-3_r1",
-                created_at="2026-09-14 00:31:12",
-                output_dir="outputs/2026-09-14_0031_c12_-3_r1",
-                obj="outputs/2026-09-14_0031_c12_-3_r1/house.obj",
-                world=str(root / "world"), dimension="overworld",
-                chunks=[[12, -3]], faces=4940, textures=["abcdef"],
+        (root / "world" / "region").mkdir(parents=True, exist_ok=True)
+        (root / "world" / "region" / "r.0.0.mca").write_bytes(b"x" * 100)
+        store = RecordStore(project.path)
+        # 几条散开的记录：导出概览图才有东西可画（历史记录表也跟着有行）
+        for index, (x, z) in enumerate(((12, -3), (13, -3), (12, -4), (18, -9))):
+            store.add(
+                ExportRecord(
+                    id="2026-09-14_003%d_c%d_%d_r1" % (index, x, z), kind="region",
+                    name="c%d_%d_r1" % (x, z),
+                    created_at="2026-09-14 00:31:1%d" % index,
+                    output_dir="outputs/2026-09-14_0031_c12_-3_r1",
+                    obj="outputs/2026-09-14_0031_c12_-3_r1/house.obj",
+                    world=str(root / "world"), dimension="overworld",
+                    chunks=[[x, z]], faces=4940 + index * 120, textures=["abcdef"],
+                )
             )
-        )
         config = AppConfig()
         config.save = lambda path=None: root / "app.json"      # 别写进仓库
         window = ProjectWindow(project, config, root)
@@ -138,8 +140,9 @@ def render_dialogs(theme_name: str, output_dir: Path) -> None:
 
     application = QApplication.instance() or QApplication([])
     design.install(application, theme_name)
-    from app.ui.project_list import _DeleteProjectDialog
+    from app.ui.delete_project import DeleteProjectDialog
     from app.ui.project_window import _ProjectConfigDialog
+    from app.ui.project_wizard import NewProjectWizard
     from app.ui.reset_dialog import ResetDataDialog
 
     with tempfile.TemporaryDirectory(prefix="lt-theme-dlg-") as tmp:
@@ -149,9 +152,11 @@ def render_dialogs(theme_name: str, output_dir: Path) -> None:
         project.save()
         for dialog, name in (
             (_ProjectConfigDialog(project, lambda: None), "config"),
-            (_DeleteProjectDialog(str(project.path), project), "delete"),
+            (DeleteProjectDialog(str(project.path), project), "delete"),
             (ResetDataDialog(root), "reset"),
+            (NewProjectWizard(AppConfig(), project.path), "wizard"),
         ):
+            dialog.resize(760, 520)
             dialog.show()
             application.processEvents()
             dialog.grab().save(str(output_dir / ("%s_%s.png" % (name, theme_name))))
@@ -178,7 +183,8 @@ def main() -> int:
                  "project_light_bottom", "project_dark_bottom",
                  "config_light", "config_dark",
                  "delete_light", "delete_dark",
-                 "reset_light", "reset_dark"):
+                 "reset_light", "reset_dark",
+                 "wizard_light", "wizard_dark"):
         print("  %s: %s" % (name, out_dir / (name + ".png")))
     return 0
 

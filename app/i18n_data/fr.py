@@ -180,4 +180,67 @@ STRINGS = {
 
     # ---- 存档检查行的前缀（中文用全角叹号，其它语言用半角）----
     "！": "!",
+
+    # ---- 项目界面 / 关于 / 概览图 / 模式示意图 ----
+    '快速导出': 'Export rapide',
+    '导出概览': 'Aperçu des exports',
+    '共 %d 个区块\u3000范围 %d × %d%s': '%d chunk(s)\u3000plage %d × %d%s',
+    '（太大，只画中间 %d × %d）': ' (trop grand : seul le centre %d × %d est dessiné)',
+    '灰 = 没导过\u3000绿 = 已导出且存档未变\u3000黄 = 已导出但之后存档变过': 'gris = jamais exporté\u3000vert = exporté, sauvegarde inchangée\u3000jaune = exporté puis sauvegarde modifiée',
+    '还没有导出记录': 'Aucun export',
+    '这个项目还没有导出记录。导出一次之后，这里会画出导过哪些区块。': "Ce projet n'a pas encore d'export. Après un export, cette carte montrera quels chunks ont été exportés.",
+    '区块 (%d, %d)\n状态：没导过\n\n这个项目没有这一块的记录。': "Chunk (%d, %d)\nÉtat : jamais exporté\n\nCe projet n'a aucun enregistrement ici.",
+    '导出于 %s': 'Exporté le %s',
+    '维度：%s': 'Dimension : %s',
+    '面数：%d': 'Faces : %d',
+    '产物：%s': 'Sortie : %s',
+    '记录：%s': 'Enregistrement : %s',
+    '界面版本：%s\n库版本：%s\n\n': "Version de l'app : %s\nVersion de la bibliothèque : %s\n\n",
+    '提交：%s\n\n': 'Commit : %s\n\n',
+    '会话日志：\n%s\n\n': 'Journal de session :\n%s\n\n',
+    '素材来自本机游戏与资源包，本工具只读取、不附带、不分发。': 'Les ressources viennent du jeu et des packs locaux ; cet outil ne fait que lire, sans rien inclure ni redistribuer.',
+    '（没问到库版本）': '(version de la bibliothèque inconnue)',
+    '（未启用日志）': '(journalisation désactivée)',
+    '没有删除': "Rien n'a été supprimé",
+    '这个目录里没有 project.json，不像是项目目录，所以没有删除任何东西（登记也保留着）：\n%s\n\n如果只是不想再看到它，选「仅从项目列表移除」。': "Pas de project.json ici : ce dossier ne ressemble pas à un projet, donc rien n'a été supprimé (l'entrée de la liste reste) :\n%s\n\nPour le retirer seulement de la liste, choisissez « Retirer seulement de la liste ».",
+    '删除失败': 'Échec de la suppression',
+    '输入一个区块坐标 (x, z)，只导出这一块。': 'Saisissez un chunk (x, z) : seul celui-ci sera exporté.',
+    '输入起点 (x1, z1) 与终点 (x2, z2)，导出这个矩形里的所有区块。': 'Saisissez les coins (x1, z1) et (x2, z2) : tous les chunks de ce rectangle seront exportés.',
+    '输入中心 (x, z) 与半径 r，导出中心周围 (2r+1)² 个区块（亮黄框是中心）。': 'Saisissez le centre (x, z) et le rayon r : (2r+1)² chunks autour seront exportés (cadre jaune = centre).',
+
+    # ---- 新建项目向导 ----
+    '这个项目叫什么？': "Comment s'appelle ce projet ?",
+    '名称与简介只影响界面显示，随时可以在「项目配置」里改。': "Le nom et la description ne servent qu'à l'affichage ; modifiables dans « Réglages du projet ».",
+    '项目名（必填）': 'Nom du projet (obligatoire)',
+    '例如：地铁站 · 站台吊顶': 'ex. : Métro · plafond du quai',
+    '简介': 'Description',
+    '这个项目是做什么的（可以留空）': 'À quoi sert ce projet ? (facultatif)',
+    '存档在哪？': 'Où est la sauvegarde ?',
+    '存档目录是必须的：项目模式的导出默认就从这里取区块。': 'Un dossier de sauvegarde est obligatoire : les exports de projet y prennent les chunks par défaut.',
+    '存档目录（必填）': 'Dossier de sauvegarde (obligatoire)',
+    '封面（可选）': 'Image de couverture (facultative)',
+    '选择封面图片': 'Choisir une image',
+    '清除封面': "Retirer l'image",
+    '存档目录是必填项。': 'Le dossier de sauvegarde est obligatoire.',
+    '还差一步': 'Encore une étape',
+    '请先填项目名。': "Indiquez d'abord un nom de projet.",
+    '存档目录是必须的，请先选一个。': 'Le dossier de sauvegarde est obligatoire — choisissez-en un.',
+    '这个路径不存在，或者不是目录：\n%s': "Ce chemin n'existe pas ou n'est pas un dossier :\n%s",
+    '确认存档目录': 'Confirmer le dossier de sauvegarde',
+    '这个目录看起来不像是存档根目录（没有 level.dat 或 region/）。\n\n仍然用它作为本项目的默认存档位置吗？': "Ce dossier ne ressemble pas à une racine de sauvegarde (pas de level.dat ni region/).\n\nL'utiliser quand même comme dossier de sauvegarde par défaut ?",
+    '图片 (*.png *.jpg *.jpeg *.bmp);;所有文件 (*)': 'Images (*.png *.jpg *.jpeg *.bmp);;Tous les fichiers (*)',
+    '上一步': '< Précédent',
+    '下一步': 'Suivant >',
+    '完成': 'Terminer',
+    '选择项目目录（可以在对话框里新建一个文件夹）': 'Choisir le dossier du projet (créable ici)',
+    '建不了项目': 'Impossible de créer le projet',
+
+    # ---- 项目模式：存档位置锁定 ----
+    '存档位置来自项目配置，要改请用项目界面上的「项目配置」。': 'Le dossier de sauvegarde vient des réglages du projet ; modifiez-le via « Réglages du projet » dans la fenêtre du projet.',
+
+    # ---- 导出对话框：本次范围摘要 ----
+    '本次：共 %d 个区块\u3000x %d … %d\u3000z %d … %d\n（右图只说明三种模式的取法，范围以上面的输入为准）': "Cet export : %d chunk(s)\u3000x %d … %d\u3000z %d … %d\n(L'illustration n'explique que les trois modes ; la plage saisie ci-dessus fait foi.)",
+
+    # ---- 快速导出时那块网格的说明 ----
+    '（项目模式下这里会显示每个区块导出过没有）': '(En mode projet, ceci indique quels chunks ont déjà été exportés.)',
 }
