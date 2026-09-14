@@ -511,4 +511,15 @@ STRINGS = {
     '一句话说清问题（必填）': 'Le problème en une ligne (obligatoire)',
     '复现步骤、期望结果、实际结果（越具体越好）': "Étapes, résultat attendu, résultat réel (plus c'est précis, mieux c'est)",
     '发送反馈': 'Envoyer',
+
+    # ---- 语义标签（下拉框 / 列表里的类型名）----
+    '问题反馈': 'Signalement de problème',
+    '建议': 'Suggestion',
+    '原版': 'Vanilla',
+    '资源包': 'Pack de ressources',
+    '模组': 'Mod',
+    '未识别': 'Non reconnu',
+    '存档': 'Sauvegarde',
+    'SNBT': 'SNBT',
+    '缺失': 'Manquant',
 }

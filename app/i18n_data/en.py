@@ -528,4 +528,15 @@ STRINGS = {
     '一句话说清问题（必填）': 'Say the problem in one line (required)',
     '复现步骤、期望结果、实际结果（越具体越好）': 'Steps to reproduce, expected result, actual result (the more specific the better)',
     '发送反馈': 'Send report',
+
+    # ---- 语义标签（下拉框 / 列表里的类型名）----
+    '问题反馈': 'Problem report',
+    '建议': 'Suggestion',
+    '原版': 'Vanilla',
+    '资源包': 'Resource pack',
+    '模组': 'Mod',
+    '未识别': 'Unrecognised',
+    '存档': 'Save',
+    'SNBT': 'SNBT',
+    '缺失': 'Missing',
 }

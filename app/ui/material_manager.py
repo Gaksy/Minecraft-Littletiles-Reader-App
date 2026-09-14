@@ -237,7 +237,7 @@ class MaterialManagerDialog(QDialog):
         view.clear()
         for source in sources:
             item = QListWidgetItem(
-                "%s\n%s" % (source.name, source.kind_label)
+                "%s\n%s" % (source.name, i18n.tr(source.kind_label))
             )
             item.setData(Qt.ItemDataRole.UserRole, source.id)
             if source.icon and Path(source.icon).is_file():

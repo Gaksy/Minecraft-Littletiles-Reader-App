@@ -119,7 +119,9 @@ class _BindingPicker(QDialog):
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.setMinimumSize(420, 260)
         for source in sources:
-            item = QListWidgetItem("%s（%s）" % (source.name, source.kind_label))
+            item = QListWidgetItem(
+                "%s（%s）" % (source.name, i18n.tr(source.kind_label))
+            )
             item.setData(Qt.ItemDataRole.UserRole, source.id)
             if source.icon and Path(source.icon).is_file():
                 item.setIcon(QIcon(source.icon))
@@ -582,7 +584,7 @@ class _ChunkSearchDialog(QDialog):
         for row, record in enumerate(found):
             values = [
                 record.created_at,
-                record.kind_label,
+                i18n.tr(record.kind_label),
                 DIMENSION_LABELS.get(record.dimension, record.dimension),
                 record.name,
                 str(record.faces or "—"),
@@ -1256,7 +1258,11 @@ class ProjectWindow(QMainWindow):
         for source_id in self.project.materials:
             source = library.by_id(source_id)
             name = source.name if source else source_id
-            kind = KIND_LABELS.get(source.kind, source.kind) if source else "缺失"
+            kind = (
+                i18n.tr(KIND_LABELS.get(source.kind, source.kind))
+                if source
+                else i18n.tr("缺失")
+            )
             text = "%s　（%s）" % (name, kind)
             if source_id in missing:
                 text += "　— 素材库里找不到了，请重新绑定"
@@ -1295,7 +1301,7 @@ class ProjectWindow(QMainWindow):
         for row, record in enumerate(records):
             values = [
                 record.created_at,
-                record.kind_label,
+                i18n.tr(record.kind_label),
                 record.name,
                 record.chunk_text(),
                 str(record.faces or "—"),
