@@ -37,6 +37,11 @@ from . import design
 from .widgets import wrap
 
 
+def wants_translation(entry: dict) -> bool:
+    """这位用户是不是在等译文（惯用语言不是简体中文）。"""
+    return (entry.get("locale") or "zh-Hans") != "zh-Hans"
+
+
 class MyFeedbackDialog(QDialog):
     """我提交过的反馈：看状态、看回复、复制数据码。"""
 
@@ -183,7 +188,9 @@ class MyFeedbackDialog(QDialog):
                 lines.append(text)
                 if origin:
                     has_origin = True
-                elif entry.get(field_name):
+                elif entry.get(field_name) and wants_translation(entry):
+                    # 只有"用户惯用语言不是中文"时，缺译文才算缺失；
+                    # 中文用户本来读中文，别拿这句噪音烦他
                     lines.append(i18n.tr("（本条回复只有中文）"))
             lines.append("")
         self.detail.setPlainText("\n".join(lines).strip())

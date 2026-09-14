@@ -200,6 +200,35 @@ def main() -> int:
         application.processEvents()
         check("展开后换成中文原文", "已在 0.2.0 修复" in mine.detail.toPlainText())
         check("未读点还在（还没点查看详情）", mine.table.item(0, 0).text() == "●")
+
+        # 只有中文回复、且用户惯用语言是繁体 → 要提示"只有中文"
+        (home / "config" / "reports.json").write_text(
+            json.dumps([{**json.loads((home / "config" / "reports.json").read_text(encoding="utf-8"))[0],
+                         "locale": "zh-Hant", "localeName": "繁體中文",
+                         "opinionI18n": None, "resolutionI18n": None,
+                         "opinion": "已修复", "resolution": "已在 0.2.0 修复"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        zh_other = MyFeedbackDialog(home, None, client=client_returning({}))
+        zh_other.show()
+        application.processEvents()
+        check("非中文用户缺译文会提示", "只有中文" in zh_other.detail.toPlainText(),
+              zh_other.detail.toPlainText().replace("\n", " | ")[:80])
+        zh_other.close()
+
+        # 惯用语言就是简体中文 → 不提示、也不显示"查看中文原文"
+        (home / "config" / "reports.json").write_text(
+            json.dumps([{**json.loads((home / "config" / "reports.json").read_text(encoding="utf-8"))[0],
+                         "locale": "zh-Hans", "localeName": "简体中文"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        zh_same = MyFeedbackDialog(home, None, client=client_returning({}))
+        zh_same.show()
+        application.processEvents()
+        text = zh_same.detail.toPlainText()
+        check("中文用户不提示只有中文", "只有中文" not in text, text.replace("\n", " | ")[:80])
+        check("中文用户不给对照入口", not zh_same.origin_toggle.isVisible())
+        zh_same.close()
         mine.close()
 
     print()
