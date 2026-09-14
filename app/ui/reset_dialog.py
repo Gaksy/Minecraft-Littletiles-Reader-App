@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import appdata
+from .. import i18n
 from ..storage import human_size
 from . import design
 from .widgets import wrap
@@ -43,14 +44,14 @@ class ResetDataDialog(QDialog):
         sizes = appdata.sizes(app_dir)
         self.boxes: dict[str, QCheckBox] = {}
         for category in appdata.CATEGORIES:
-            box = QCheckBox(category.label)
-            box.setToolTip(category.hint)
+            box = QCheckBox(i18n.tr(category.label))
+            box.setToolTip(i18n.tr(category.hint))
             box.setChecked(True)
             box.toggled.connect(self._sync)
             self.boxes[category.key] = box
             row = QHBoxLayout()
             row.addWidget(box)
-            row.addWidget(QLabel("　—　%s" % category.hint), 1)
+            row.addWidget(QLabel("　—　%s" % i18n.tr(category.hint)), 1)
             row.addWidget(QLabel(human_size(sizes.get(category.key, 0))))
             layout.addLayout(row)
 
@@ -76,6 +77,7 @@ class ResetDataDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._sizes = sizes
+        i18n.translate(self)
         self._sync()
 
     def keys(self) -> list[str]:
@@ -84,5 +86,7 @@ class ResetDataDialog(QDialog):
     def _sync(self) -> None:
         chosen = self.keys()
         total = sum(self._sizes.get(key, 0) for key in chosen)
-        self.total.setText("将清空 %d 类，释放约 %s。" % (len(chosen), human_size(total)))
+        self.total.setText(
+            i18n.tr("将清空 %d 类，释放约 %s。") % (len(chosen), human_size(total))
+        )
         self.btn_ok.setEnabled(bool(chosen))

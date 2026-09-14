@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import AppConfig
+from .. import i18n
 from ..job import (
     CHUNK_MODE_LABELS,
     CHUNK_MODES,
@@ -92,10 +93,14 @@ class ExportRegionDialog(QDialog):
         self._cell_info: dict = {}
         self._build_ui()
         self._reset_detail()
-        self.hover_label.setText("把鼠标停在格子上看这一块的坐标与状态。")
+        self.hover_label.setText(
+            i18n.tr("把鼠标停在格子上看这一块的坐标与状态。")
+        )
         if self._state_provider is None:
             self.grid_legend.setText(
-                "黄框 = 本次范围（快速导出没有导出记录，不显示“导过没有”）"
+                i18n.tr(
+                    "黄框 = 本次范围（快速导出没有导出记录，不显示“导过没有”）"
+                )
             )
         self._sync()
         # 左列输入 + 右列概览图并排，宽度给足（概览图要能横向铺开）
@@ -147,13 +152,13 @@ class ExportRegionDialog(QDialog):
 
         self.dimension = QComboBox()
         for value in DIMENSIONS:
-            self.dimension.addItem(DIMENSION_LABELS[value], value)
+            self.dimension.addItem(i18n.tr(DIMENSION_LABELS[value]), value)
         self.dimension.currentIndexChanged.connect(self._sync)
         form.addRow("维度", self.dimension)
 
         self.mode = QComboBox()
         for value in CHUNK_MODES:
-            self.mode.addItem(CHUNK_MODE_LABELS[value], value)
+            self.mode.addItem(i18n.tr(CHUNK_MODE_LABELS[value]), value)
         self.mode.setCurrentIndex(CHUNK_MODES.index("center"))
         self.mode.currentIndexChanged.connect(self._sync)
         form.addRow("区块选择", self.mode)
@@ -218,6 +223,7 @@ class ExportRegionDialog(QDialog):
             "黄框 = 本次范围"
         )
         design.set_role(self.grid_legend, "hint")
+        wrap(self.grid_legend)          # 德语/法语更长，不折行会被右边缘切掉
         head.addWidget(self.grid_legend, 1)
         right_layout.addLayout(head)
 
@@ -267,6 +273,7 @@ class ExportRegionDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+        i18n.translate(self)
 
     @staticmethod
     def _spin(low: int = -100000, high: int = 100000) -> QSpinBox:
@@ -300,7 +307,7 @@ class ExportRegionDialog(QDialog):
         self._sync_save_status()
         selection = self.selection()
         self.summary.setText(
-            "本次：共 %d 个区块　x %d … %d　z %d … %d（%d × %d）"
+            i18n.tr("本次：共 %d 个区块　x %d … %d　z %d … %d（%d × %d）")
             % (
                 selection.total,
                 selection.min_x,
@@ -320,7 +327,7 @@ class ExportRegionDialog(QDialog):
             text = "✓ %s" % result.message
             role = "ok"
         else:
-            text = "！%s" % result.message
+            text = i18n.tr("！") + result.message
             if result.hint:
                 text += "　%s" % result.hint
             role = "warn"
@@ -384,8 +391,10 @@ class ExportRegionDialog(QDialog):
         drawn = (self.state_map.grid.count_x, self.state_map.grid.count_z)
         note = ""
         if drawn != (count_x, count_z):
-            note = "（范围太大，图上只画了中间 %d × %d，其余靠拖动查看）" % drawn
-        self.grid_size_label.setText("区块概览：%d × %d%s" % (count_x, count_z, note))
+            note = i18n.tr("（范围太大，图上只画了中间 %d × %d，其余靠拖动查看）") % drawn
+        self.grid_size_label.setText(
+            i18n.tr("区块概览：%d × %d%s") % (count_x, count_z, note)
+        )
         # 让"本次范围"落在眼前：图比视口大时滚到它的中心
         self.state_map.center_on_chunk(
             selection.min_x + (selection.count_x - 1) // 2,
@@ -428,7 +437,9 @@ class ExportRegionDialog(QDialog):
         if x < 0:
             self.hover_label.setText("")
             return
-        self.hover_label.setText("区块 (%d, %d)：%s" % (x, z, text.split("：", 1)[-1]))
+        self.hover_label.setText(
+            i18n.tr("区块 (%d, %d)：%s") % (x, z, text.split("：", 1)[-1])
+        )
 
     def _on_grid_clicked(self, x: int, z: int) -> None:
         """点一格 → 详情显示在图的旁边（没点之前给一句用法说明）。"""
@@ -437,18 +448,20 @@ class ExportRegionDialog(QDialog):
             return
         state, detail = self._cell_info.get((x, z), ("missing", ""))
         lines = [
-            "区块 (%d, %d)" % (x, z),
-            "状态：%s" % STATE_LABELS.get(state, state),
+            i18n.tr("区块 (%d, %d)") % (x, z),
+            i18n.tr("状态：%s") % i18n.tr(STATE_LABELS.get(state, state)),
         ]
         if detail:
             lines.append(detail)
-        lines.append("区域文件：r.%d.%d.mca" % (x >> 5, z >> 5))
+        lines.append(i18n.tr("区域文件：r.%d.%d.mca") % (x >> 5, z >> 5))
         if state == "missing":
-            lines.append("这一块还没有导出过。")
+            lines.append(i18n.tr("这一块还没有导出过。"))
         self.detail.setText("\n".join(lines))
 
     def _reset_detail(self) -> None:
-        self.detail.setText("在左边的概览图上点一个区块，这里显示它的详情。")
+        self.detail.setText(
+            i18n.tr("在左边的概览图上点一个区块，这里显示它的详情。")
+        )
 
     # ---- 结果 ------------------------------------------------------------
 

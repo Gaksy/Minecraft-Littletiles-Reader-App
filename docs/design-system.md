@@ -96,6 +96,17 @@ painter.setBrush(QColor(t.accent))
 自定义绘制（区块状态格子、容量条）在 `paintEvent` 里取 `design.theme()`，
 所以切主题会立刻跟着变；`ThemeManager` 切换时会重绘所有控件。
 
+## 5.1 分组标题、动效与弹窗按钮
+
+- **分组标题（QGroupBox）不能贴着框线**：Qt 把边框画在"内容矩形"上，
+  `margin-top` 那条空白就是标题的地盘，标题的 `top` 只能在这条带子里微调——
+  负值会顶出控件被裁掉一半（踩过）。现值：`margin-top: 22px`、`top: 4px`。
+- **动效只做"让人看懂发生了什么"**（`app/ui/design/motion.py`）：窗口/对话框淡入、
+  容量条从 0 长到实际比例、项目卡片依次淡入。离屏（自检与截图）与
+  `LTR_NO_MOTION=1` 一律不动画——截图要的是确定的静止画面。
+- **标准弹窗按钮说中文**：装一个应用级过滤器（`components.ButtonTextFilter`），
+  不依赖发行版自带的 Qt 翻译包；文案走 `i18n.tr()`，所以英文界面下就是 OK / Cancel。
+
 ## 6. 深浅色
 
 主题名 `"dark"`（默认）与 `"light"`，用户的选择存在 `AppConfig.ui_theme`；

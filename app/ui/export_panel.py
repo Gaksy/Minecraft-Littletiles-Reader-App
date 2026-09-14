@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import i18n
 from ..applog import logger
 from ..config import AppConfig
 from ..job import ExportProgress, write_job
@@ -113,6 +114,7 @@ class ExportPanel(QWidget):
         self.log_view.setReadOnly(True)
         self.log_view.setPlaceholderText("导出日志会显示在这里")
         root.addWidget(self.log_view, 1)
+        i18n.translate(self)
 
     # ---- 跑一次 ----------------------------------------------------------
 

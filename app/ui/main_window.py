@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QEventLoop, QThread, QUrl, Qt, Signal
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QActionGroup, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from ltgen import paths
 from ltgen.lint import lint_package
 
-from .. import appdata
+from .. import appdata, i18n
 from ..applog import logger
 from ..config import APP_DIR, AppConfig
 from ..job import build_snbt_job, default_options
@@ -259,14 +259,14 @@ class MainWindow(QMainWindow):
         # 会被当成"已配置"，用户看状态栏以为没问题。
         configured = self.config.default_assets
         if not configured:
-            assets = "（未设置）"
+            assets = i18n.tr("（未设置）")
         elif lint_package(Path(configured)).ok:
             assets = configured
         else:
-            assets = "（不可用，导出时会要求重新选择）%s" % configured
+            assets = i18n.tr("（不可用，导出时会要求重新选择）%s") % configured
         version = ("    库 %s" % self._library_version) if self._library_version else ""
         self.status.showMessage(
-            "素材包: %s    模型输出目录: %s%s    CLI: %s"
+            i18n.tr("素材包: %s    模型输出目录: %s%s    CLI: %s")
             % (assets, self.config.resolved_output_dir(), version, cli)
         )
 
@@ -370,6 +370,22 @@ class MainWindow(QMainWindow):
 
         view = bar.addMenu("视图(&V)")
         self.action_theme = view.addAction(self._theme_action_text(), self._toggle_theme)
+        # 语言：改完写进配置，重启后生效（Qt 的文案是死值，重启最不容易出半截界面）
+        language = view.addMenu("语言")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for code, name in i18n.LANGUAGES:
+            action = language.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(code == i18n.current())
+            action.triggered.connect(lambda _checked=False, chosen=code: self._set_language(chosen))
+            group.addAction(action)
+        self.language_group = group
+        language.addSeparator()
+        follow = language.addAction("跟随系统")
+        follow.setCheckable(True)
+        follow.setChecked(not self.config.language)
+        follow.triggered.connect(lambda _checked=False: self._set_language(""))
 
         # 应用级操作放最后：都是"按了有明显后果"的东西
         app_menu = bar.addMenu("应用(&A)")
@@ -377,6 +393,20 @@ class MainWindow(QMainWindow):
 
         help_menu = bar.addMenu("帮助(&H)")
         help_menu.addAction("关于", self._show_about)
+        i18n.translate(self)
+
+    def _set_language(self, code: str) -> None:
+        """切换界面语言：写进配置，提示重启。"""
+
+        chosen = code or i18n.system_language()
+        self.config.language = code
+        self._save_config("语言")
+        logger().info("界面语言改为 %s（重启后生效）", code or "跟随系统")
+        QMessageBox.information(
+            self,
+            "语言",
+            "界面语言已切换为 %s，重启应用后生效。" % i18n.display_name(chosen),
+        )
 
     def _theme_action_text(self) -> str:
         return "切换到浅色主题" if design.manager().is_dark else "切换到深色主题"

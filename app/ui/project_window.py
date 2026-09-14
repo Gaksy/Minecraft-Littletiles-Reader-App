@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
 
 from ltgen import paths
 
+from .. import i18n
 from ..applog import logger
 from ..compose import ComposeError
 from ..config import APP_DIR, AppConfig
@@ -701,6 +702,7 @@ class ProjectWindow(QMainWindow):
         self.setCentralWidget(central)
         self._build_menu()
         self._apply_button_style()
+        i18n.translate(self)
 
     def _build_header(self) -> QWidget:
         box = QWidget()

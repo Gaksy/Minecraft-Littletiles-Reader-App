@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import i18n
 from ..applog import logger
 from ..config import AppConfig
 from ..project import Project
@@ -122,6 +123,7 @@ class ProjectCard(QWidget):
 
         design.set_role(self.description, "hint")
         design.set_role(self.path_label, "dim")
+        i18n.translate(self)
 
     def _refresh(self) -> None:
         theme = design.theme()
@@ -137,6 +139,7 @@ class ProjectCard(QWidget):
             self.btn_relocate.setVisible(True)
             self.btn_delete.setVisible(True)
             self._paint_border()
+            i18n.translate(self)
             return
 
         self.name.setText(self.project.name or "未命名项目")
@@ -164,6 +167,7 @@ class ProjectCard(QWidget):
         self.btn_relocate.setVisible(False)
         self.btn_delete.setVisible(True)
         self._paint_border()
+        i18n.translate(self)
 
     def _paint_border(self) -> None:
         """卡片描边：悬停时用强调绿，平时用普通描边（直角 + 2px，与网站一致）。"""
@@ -259,6 +263,7 @@ class _DeleteProjectDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        i18n.translate(self)
         self._sync()
 
     def _sync(self) -> None:
@@ -316,6 +321,7 @@ class ProjectListWidget(QWidget):
         root.addWidget(self.scroll, 1)
 
         design.set_role(self.count_label, "hint")
+        i18n.translate(self)
 
     # ---- 刷新 ------------------------------------------------------------
 

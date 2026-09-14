@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .tokens import METRICS
+from ... import i18n
 
 
 def set_variant(widget: QWidget, variant: str) -> QWidget:
@@ -198,7 +199,7 @@ def localize_buttons(
     ):
         button = box.button(standard)
         if button is not None:
-            button.setText(text)
+            button.setText(i18n.tr(text))
     return box
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import i18n
 from .records import DIMENSION_SUBFOLDERS, region_file
 
 
@@ -30,9 +31,9 @@ class SaveInspection:
 def inspect(root: str | Path, dimension: str = "overworld") -> SaveInspection:
     path = Path(str(root).strip()) if str(root).strip() else None
     if path is None:
-        return SaveInspection(message="还没有选择存档目录。")
+        return SaveInspection(message=i18n.tr("还没有选择存档目录。"))
     if not path.is_dir():
-        return SaveInspection(message="这个路径不存在，或者不是目录。")
+        return SaveInspection(message=i18n.tr("这个路径不存在，或者不是目录。"))
 
     sub = DIMENSION_SUBFOLDERS.get(dimension, "region")
     region_dir = path / Path(sub)
@@ -42,15 +43,15 @@ def inspect(root: str | Path, dimension: str = "overworld") -> SaveInspection:
     result = SaveInspection(level_dat=level_dat, mca_count=mca_count)
     if mca_count > 0:
         result.ok = True
-        result.message = "找到 %s/（%d 个 .mca）%s" % (
-            sub, mca_count, "，含 level.dat" if level_dat else ""
+        result.message = i18n.tr("找到 %s/（%d 个 .mca）%s") % (
+            sub, mca_count, i18n.tr("，含 level.dat") if level_dat else ""
         )
         return result
 
     # 选进了 region/ 里面：往上退一层就是存档根目录
     if path.name in ("region", "DIM-1", "DIM1") and any(path.glob("*.mca")):
-        result.message = "这里像是 %s/ 目录本身，不是存档根目录。" % path.name
-        result.hint = "往上退一层选：%s" % path.parent
+        result.message = i18n.tr("这里像是 %s/ 目录本身，不是存档根目录。") % path.name
+        result.hint = i18n.tr("往上退一层选：%s") % path.parent
         return result
 
     # 选到了 saves/ 这一层：找找哪个子目录像存档
@@ -65,19 +66,19 @@ def inspect(root: str | Path, dimension: str = "overworld") -> SaveInspection:
     ]
     result.candidates = candidates
     if candidates:
-        result.message = "这个目录里没有直接的存档，但里面有 %d 个像存档的文件夹。" % len(
-            candidates
-        )
-        result.hint = "大概想选的是：%s" % "、".join(c.name for c in candidates[:3])
+        result.message = i18n.tr(
+            "这个目录里没有直接的存档，但里面有 %d 个像存档的文件夹。"
+        ) % len(candidates)
+        result.hint = i18n.tr("大概想选的是：%s") % "、".join(c.name for c in candidates[:3])
         return result
 
     if level_dat:
-        result.message = "有 level.dat，但 %s/ 里没有 .mca 文件。" % sub
-        result.hint = "这个存档可能还没生成过地图，或者维度选错了。"
+        result.message = i18n.tr("有 level.dat，但 %s/ 里没有 .mca 文件。") % sub
+        result.hint = i18n.tr("这个存档可能还没生成过地图，或者维度选错了。")
         return result
 
-    result.message = "这里既没有 level.dat，也没有 %s/。" % sub
-    result.hint = "存档根目录是含 level.dat 与 region/ 的那一层。"
+    result.message = i18n.tr("这里既没有 level.dat，也没有 %s/。") % sub
+    result.hint = i18n.tr("存档根目录是含 level.dat 与 region/ 的那一层。")
     return result
 
 
