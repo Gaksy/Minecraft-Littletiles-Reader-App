@@ -176,6 +176,7 @@ docs/
 ├── design.md              应用的需求与设计（含多语言与界面约定）
 ├── design-system.md       界面设计系统（令牌 / 组件 / 文案规范）
 ├── update-and-feedback.md 检查更新与反馈上报（结合服务器现状的评估）
+├── licenses.md            许可证审计（发布前必读：CGAL 的 GPL 影响与三种发布形态）
 └── job.md                 与库的 job 契约（应用侧）
 ```
 
