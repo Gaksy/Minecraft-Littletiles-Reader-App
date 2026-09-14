@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 from ltgen import paths
 from ltgen.lint import lint_package
 
+from .. import appdata
 from ..applog import logger
 from ..config import APP_DIR, AppConfig
 from ..job import build_snbt_job, default_options
@@ -40,6 +41,7 @@ from ..project import Project
 from ..sources import ARCHIVE_SUFFIXES, resolve_source
 from ..compose import ComposeError, compose
 from ..library import Library
+from ..storage import human_size
 from ..vanilla import build_package_from_resolved, detect_kind
 from .export_panel import ExportPanel
 from .export_dialog import ExportRegionDialog
@@ -151,6 +153,7 @@ class MainWindow(QMainWindow):
         self.resize(980, 760)
         self.config = config
         self._library_version = ""   # 由 start 事件带回
+        self._faded_in = False
         # 打开的项目窗口留一份引用：不然会被 GC 掉，看起来就是"一闪而过"
         self._project_windows: list[ProjectWindow] = []
         # 进度、日志、取消、打开输出目录都在面板里：项目界面用的是同一块，
@@ -181,6 +184,14 @@ class MainWindow(QMainWindow):
         logger().info("默认输出目录: %s", self.config.resolved_output_dir())
 
     # ---- 兼容层 ----------------------------------------------------------
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """第一次显示时淡入一次（避免整屏"啪"地出现）。"""
+
+        super().showEvent(event)
+        if not self._faded_in:
+            self._faded_in = True
+            design.motion.fade_in(self.centralWidget())
 
     @property
     def progress(self):
@@ -231,6 +242,7 @@ class MainWindow(QMainWindow):
 
         self.projects = ProjectListWidget(self.config, self)
         self.projects.opened.connect(self._open_project)
+        self.projects.deleted.connect(self._on_project_deleted)
         layout.addWidget(self.projects, 1)
 
         # 进度、取消、打开输出目录、日志 = 一块面板（主界面与项目界面共用）
@@ -251,7 +263,7 @@ class MainWindow(QMainWindow):
         elif lint_package(Path(configured)).ok:
             assets = configured
         else:
-            assets = "（不可用，导出时会让你重选）%s" % configured
+            assets = "（不可用，导出时会要求重新选择）%s" % configured
         version = ("    库 %s" % self._library_version) if self._library_version else ""
         self.status.showMessage(
             "素材包: %s    模型输出目录: %s%s    CLI: %s"
@@ -274,7 +286,7 @@ class MainWindow(QMainWindow):
         管理里做，这里只把右列的顺序变成实际可用的素材包。
 
         非项目模式下不该每次都逼用户过一遍列表——选择记在库里，这次直接用；
-        要改就点主界面的「材质管理…」。组合按顺序指纹缓存，没变就是毫秒级命中。
+        要改就点主界面的「材质管理」。组合按顺序指纹缓存，没变就是毫秒级命中。
         """
         library = Library.load(APP_DIR)
         kept = library.selected()
@@ -347,17 +359,21 @@ class MainWindow(QMainWindow):
         bar = self.menuBar()
 
         materials = bar.addMenu("素材(&M)")
-        self.action_materials = materials.addAction("材质管理…", self._open_materials)
-        materials.addAction("区块选择说明…", self._show_help)
+        self.action_materials = materials.addAction("材质管理", self._open_materials)
+        materials.addAction("区块选择说明", self._show_help)
 
         output = bar.addMenu("输出(&O)")
-        output.addAction("设置默认输出目录…", self._choose_output_dir)
+        output.addAction("设置默认输出目录", self._choose_output_dir)
         output.addAction("恢复默认输出目录", self._reset_output_dir)
         output.addAction("打开输出目录", self._open_last_output)
         output.addAction("清空日志窗口", self.log.clear)
 
         view = bar.addMenu("视图(&V)")
         self.action_theme = view.addAction(self._theme_action_text(), self._toggle_theme)
+
+        # 应用级操作放最后：都是"按了有明显后果"的东西
+        app_menu = bar.addMenu("应用(&A)")
+        app_menu.addAction("清空所有数据", self._reset_app_data)
 
         help_menu = bar.addMenu("帮助(&H)")
         help_menu.addAction("关于", self._show_about)
@@ -411,6 +427,50 @@ class MainWindow(QMainWindow):
     def _show_help(self) -> None:
         IllustrationDialog(self).exec()
 
+    # ---- 清空所有数据 ----------------------------------------------------
+
+    def _reset_app_data(self) -> None:
+        """清掉应用自己的数据（设置 / 素材库 / 产物 / 日志），不碰项目目录。"""
+
+        if self.runner.is_running:
+            QMessageBox.information(
+                self, "导出进行中", "导出任务还没结束，现在不能清空数据。"
+            )
+            return
+
+        from .reset_dialog import ResetDataDialog
+
+        dialog = ResetDataDialog(APP_DIR, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        keys = dialog.keys()
+        if not keys:
+            return
+        try:
+            freed = appdata.clear(APP_DIR, keys)
+        except OSError as error:
+            logger().exception("清空数据失败：%s", keys)
+            QMessageBox.warning(self, "清空失败", str(error))
+            return
+
+        total = sum(freed.values())
+        names = "、".join(appdata.category_for(key).label for key in keys)
+        # 清空是个大动作，必须留痕（"我的素材怎么没了"不能变成无头案）
+        logger().info("清空数据：%s，释放 %d 字节", names, total)
+        if "settings" in keys:
+            appdata.reset_config(self.config)
+            design.set_theme(self.config.ui_theme)
+            self.action_theme.setText(self._theme_action_text())
+        self.projects.refresh()
+        self._refresh_status()
+        self.panel.log_line("已清空：%s（释放约 %s）" % (names, human_size(total)))
+        QMessageBox.information(
+            self,
+            "已清空",
+            "已清空：%s\n释放约 %s。\n\n项目目录没有被改动。"
+            % (names, human_size(total)),
+        )
+
     # ---- 项目 ------------------------------------------------------------
 
     def _open_project(self, directory: str) -> None:
@@ -421,7 +481,7 @@ class MainWindow(QMainWindow):
                 self,
                 "项目读不出来",
                 "这个目录里读不到 project.json：\n%s\n\n"
-                "如果项目被搬到别处，用卡片上的「重新定位…」。" % directory,
+                "如果项目被搬到别处，用卡片上的「重新定位」。" % directory,
             )
             self.projects.refresh()
             return
@@ -438,6 +498,15 @@ class MainWindow(QMainWindow):
         self._project_windows = [w for w in self._project_windows if w is not window]
         self.projects.refresh()
 
+    def _on_project_deleted(self, directory: str) -> None:
+        """项目目录被删了：把还开着的那个窗口关掉——不然它会继续往不存在的目录写。"""
+
+        for window in list(self._project_windows):
+            if str(window.project.path) == str(Path(directory)):
+                logger().info("项目目录已被删除，关闭其窗口：%s", directory)
+                window.close()
+        self.panel.log_line("项目已删除：%s" % directory)
+
     def _show_about(self) -> None:
         from .. import __version__
         from ..applog import session_path
@@ -449,7 +518,7 @@ class MainWindow(QMainWindow):
             "界面版本：%s\n库版本：%s\n\n"
             "提交：%s\n\n"
             "会话日志：\n%s\n\n"
-            "素材全部来自你自己的游戏与资源包，本工具只读取、不附带也不分发。"
+            "素材来自本机游戏与资源包，本工具只读取、不附带、不分发。"
             % (
                 __version__,
                 self._library_version or "（本次还没导出过）",
@@ -565,7 +634,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "素材包已生成",
-                "已用你选择的文件生成素材包：\n%s\n\n%d 个方块 / %d 张贴图，缺失 %d 张。\n"
+                "已用所选文件生成素材包：\n%s\n\n%d 个方块 / %d 张贴图，缺失 %d 张。\n"
                 "已设为默认，之后导出直接用。"
                 % (
                     build.package_dir,
@@ -583,7 +652,7 @@ class MainWindow(QMainWindow):
                 "识别为：%s\n\n"
                 "它只有贴图，没有「哪个方块的哪一面用哪张图」的信息——那部分是"
                 "原版模型定义的。所以它需要先有一个原版底子才能合并进来。\n\n"
-                "现在可以先选你自己的 Minecraft 1.12.2 客户端 jar（"
+                "现在可以先选本机的 Minecraft 1.12.2 客户端 jar（"
                 "versions\\1.12.2\\1.12.2.jar）生成素材包；"
                 "资源包与模组的合并是后续步骤。"
                 % ("资源包" if kind == "resourcepack" else "模组"),

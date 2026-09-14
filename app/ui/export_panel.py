@@ -33,6 +33,7 @@ from ..applog import logger
 from ..config import AppConfig
 from ..job import ExportProgress, write_job
 from ..runner import ExportRunner
+from ..storage import human_size
 
 # 阶段名 → 给用户看的中文（库发的是 parse/mesh/write）
 STAGE_LABELS = {"parse": "解析", "mesh": "建网格", "write": "写出文件"}
@@ -68,6 +69,7 @@ class ExportPanel(QWidget):
         self.config = config
         self.app_dir = Path(app_dir)
         self.last_output_dir: Path | None = None
+        self.last_obj: Path | None = None       # 最近一次导出的模型（打包用）
         self.progress = ExportProgress()
         self.runner = ExportRunner(self)
         self._open_directory = open_directory or default_open_directory
@@ -87,14 +89,23 @@ class ExportPanel(QWidget):
         row = QHBoxLayout()
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
+        # 打包：把 OBJ + MTL + 这次用到的贴图收成一个能拷走的 zip
         self.open_output = QPushButton("打开输出目录")
         self.open_output.setEnabled(False)
         self.open_output.clicked.connect(self.open_last_output)
+        self.pack = QPushButton("打包成 zip")
+        self.pack.setEnabled(False)
+        self.pack.setToolTip(
+            "把模型、MTL 与这次用到的贴图收成一个 zip（放在产物目录里），"
+            "拷贝到别处也能直接用"
+        )
+        self.pack.clicked.connect(self.pack_last_output)
         self.cancel = QPushButton("取消")
         self.cancel.setEnabled(False)
         self.cancel.clicked.connect(self.runner.cancel)
         row.addWidget(self.bar, 1)
         row.addWidget(self.open_output)
+        row.addWidget(self.pack)
         row.addWidget(self.cancel)
         root.addLayout(row)
 
@@ -130,7 +141,9 @@ class ExportPanel(QWidget):
             "job 原文 (%s):\n%s", job_path, json.dumps(job, ensure_ascii=False, indent=2)
         )
         self.last_output_dir = Path(job["output"]["dir"])
+        self.last_obj = None
         self.open_output.setEnabled(True)
+        self.pack.setEnabled(False)
         self.progress = ExportProgress()
         self.bar.setRange(0, 100)
         self.bar.setValue(0)
@@ -216,6 +229,7 @@ class ExportPanel(QWidget):
                 )
             )
             self.log_line("产物: %s" % result.get("obj"))
+            self.set_obj(result.get("obj"))
             self.offer_open_output(self.output_dir_of(result))
         else:
             self.bar.setValue(0)
@@ -223,6 +237,74 @@ class ExportPanel(QWidget):
         self.finished_ok.emit(bool(ok and not self.progress.error), dict(result))
 
     # ---- 输出目录 --------------------------------------------------------
+
+    def set_obj(self, obj: str | Path | None) -> None:
+        """记下"这次的模型是哪个文件"，并让「打包成 zip」可用。"""
+
+        path = Path(str(obj)) if obj else None
+        self.last_obj = path if (path is not None and path.is_file()) else None
+        self.pack.setEnabled(self.last_obj is not None)
+
+    def pack_last_output(self) -> dict | None:
+        """把最近一次导出的产物打成 zip（自足：OBJ + MTL + 贴图）。"""
+
+        if self.last_obj is None:
+            self.log_line("没有可打包的模型（先导出一次）。")
+            return None
+        return self.pack_obj(self.last_obj)
+
+    def pack_obj(self, obj: Path) -> dict | None:
+        """打包指定模型；成功后在日志里说清包在哪、装了什么。"""
+
+        from ..packaging import pack
+        from .background import run_in_background
+
+        try:
+            result = run_in_background(
+                self,
+                "打包成 zip",
+                "正在把模型、MTL 与贴图收进一个 zip…\n\n%s" % Path(obj).name,
+                lambda: pack(obj),
+            )
+        except Exception as error:      # 打包失败不该盖住"导出其实成功了"
+            logger().exception("打包失败：%s", obj)
+            self.log_line("打包失败：%s" % error)
+            self._message_box_warning("打包失败", str(error))
+            return None
+        self.log_line(
+            "打包完成：%s（%d 个 MTL / %d 张贴图 / %s）"
+            % (
+                result.zip_path,
+                result.materials,
+                result.textures,
+                human_size(result.size_bytes),
+            )
+        )
+        if result.missing:
+            self.log_line(
+                "警告：有 %d 个贴图文件没找到，包里缺它们：%s"
+                % (len(result.missing), "、".join(result.missing[:5]))
+            )
+        box = self._message_box(self)
+        box.setWindowTitle("打包完成")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("已打包成 zip。")
+        box.setInformativeText(
+            "%s\n\n模型 + MTL + %d 张贴图，约 %s。\n"
+            "把这个 zip 拷到别处解压即可使用，不需要再拷贴图库。"
+            % (result.zip_path, result.textures, human_size(result.size_bytes))
+        )
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Close
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Open)
+        if box.exec() == QMessageBox.StandardButton.Open:
+            self._open_directory(result.zip_path.parent)
+        return {
+            "zip": str(result.zip_path),
+            "textures": result.textures,
+            "missing": list(result.missing),
+        }
 
     def output_dir_of(self, result: dict) -> Path | None:
         """优先用产物所在目录；拿不到就退回 job 里指定的那个。"""
@@ -247,7 +329,11 @@ class ExportPanel(QWidget):
         box.setWindowTitle("导出完成")
         box.setIcon(QMessageBox.Icon.Information)
         box.setText("导出完成。")
-        box.setInformativeText("要打开输出目录吗？\n%s" % directory)
+        box.setInformativeText(
+            "要打开输出目录吗？\n%s\n\n"
+            "要把模型拷到别处用（发人或换机器），点面板上的「打包成 zip」——"
+            "它会连贴图一起打包。" % directory
+        )
         box.setStandardButtons(
             QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Close
         )

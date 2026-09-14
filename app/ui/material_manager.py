@@ -111,15 +111,15 @@ class MaterialManagerDialog(QDialog):
         left_box.addWidget(QLabel("可用的素材"))
         self.available = self._make_list()
         left_box.addWidget(self.available)
-        import_button = QPushButton("导入 zip / rar / jar…")
+        import_button = QPushButton("导入素材包")
         import_button.clicked.connect(self._import)
         left_box.addWidget(import_button)
         # 删除是"从素材库里移除"，属于左列的事；放右边会让人以为删的是"本次启用"
-        self.btn_remove = QPushButton("从库中删除…")
+        self.btn_remove = QPushButton("从库中删除")
         self.btn_remove.clicked.connect(self._remove_from_library)
         left_box.addWidget(self.btn_remove)
         # 兜底：出了说不清的问题时，把库与缓存清空重来，比一点点排查快
-        self.btn_clear = QPushButton("清空重来…")
+        self.btn_clear = QPushButton("清空素材库")
         self.btn_clear.clicked.connect(self._clear_everything)
         self.btn_clear.setToolTip("删掉导入的素材与组合缓存，回到刚装好的状态")
         left_box.addWidget(self.btn_clear)

@@ -87,6 +87,14 @@ class ExportRegionDialog(QDialog):
         if show_help_on_open:
             self._show_help()
 
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """对话框出现时淡入一次。"""
+
+        super().showEvent(event)
+        if not getattr(self, "_faded_in", False):
+            self._faded_in = True
+            design.motion.fade_in(self)
+
     # ---- 界面 ------------------------------------------------------------
 
     def _build_ui(self) -> None:
@@ -96,7 +104,7 @@ class ExportRegionDialog(QDialog):
         save_row = QHBoxLayout()
         self.save_edit = QLineEdit(self._initial_save or self._default_save())
         self.save_edit.setPlaceholderText("存档根目录（含 level.dat 的那个文件夹）")
-        browse = QPushButton("浏览…")
+        browse = QPushButton("选择文件夹")
         browse.clicked.connect(self._pick_save)
         save_row.addWidget(QLabel("存档"))
         save_row.addWidget(self.save_edit, 1)
@@ -171,7 +179,7 @@ class ExportRegionDialog(QDialog):
 
         # 右：示意图（静态） + 本次范围摘要
         right_layout = QVBoxLayout()
-        self.help_button = QPushButton("区块选择说明…")
+        self.help_button = QPushButton("区块选择说明")
         self.help_button.clicked.connect(self._show_help)
         right_layout.addWidget(self.help_button)
 

@@ -24,7 +24,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QEventLoop, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -81,6 +81,7 @@ from ..retention import plan as retention_plan, policy_active
 from ..storage import categories, human_size, percent
 from ..storage import CATEGORY_PATHS
 from ..texture_library import absorb, library_path, orphans, prune
+from .background import run_in_background
 from .chunk_grid import ChunkStateGrid
 from .export_dialog import ExportRegionDialog
 from .export_panel import ExportPanel
@@ -89,53 +90,8 @@ from . import design
 from .snbt_source import choose_snbt_source, save_pasted_snbt
 from .widgets import ClickableLabel, wrap
 
-
-class _Worker(QThread):
-    """把一件慢活放后台线程跑（组合素材、备份存档、收贴图…）。
-
-    主线程用嵌套事件循环等它——界面照常重绘，进度框一直在动。放主线程的话
-    "组合素材"这几秒会整段冻住，看起来像卡死（M1 踩过）。
-    """
-
-    finished_with = Signal(object)
-
-    def __init__(self, work, parent=None) -> None:
-        super().__init__(parent)
-        self._work = work
-
-    def run(self) -> None:
-        try:
-            self.finished_with.emit(self._work())
-        except Exception as error:      # 交给主线程决定怎么说
-            self.finished_with.emit(error)
-
-
-def run_in_background(parent, title: str, text: str, work) -> object:
-    """跑 work()，其间显示不确定进度框；返回结果，异常原样抛回调用方。"""
-    dialog = QProgressDialog(text, "", 0, 0, parent)
-    dialog.setWindowTitle(title)
-    dialog.setWindowModality(Qt.WindowModality.WindowModal)
-    dialog.setCancelButton(None)
-    dialog.setMinimumDuration(0)
-    dialog.show()
-
-    worker = _Worker(work, parent)
-    result: dict = {}
-    loop = QEventLoop()
-
-    def finished(payload) -> None:
-        result["payload"] = payload
-        loop.quit()
-
-    worker.finished_with.connect(finished)
-    worker.start()
-    loop.exec()
-    worker.wait()
-    dialog.close()
-    payload = result.get("payload")
-    if isinstance(payload, Exception):
-        raise payload
-    return payload
+# 封面"清除"的哨兵值：和"没改过（空串）"、"选了新文件（路径）"区分开
+_COVER_CLEAR = "__clear__"
 
 
 class _BindingPicker(QDialog):
@@ -185,7 +141,7 @@ class _BackupsDialog(QDialog):
         layout = QVBoxLayout(self)
         hint = QLabel(
             "每次备份都是**整个存档**打成的 zip，放在 <项目>/inputs/saves/。\n"
-            "删掉只是删这份备份，你的存档本身不受影响。"
+            "删除只影响这份备份，原始存档不受影响。"
         )
         wrap(hint)
         layout.addWidget(hint)
@@ -203,7 +159,7 @@ class _BackupsDialog(QDialog):
         row = QHBoxLayout()
         self.btn_open = QPushButton("打开所在目录")
         self.btn_open.clicked.connect(self._open_folder)
-        self.btn_delete = QPushButton("删除选中…")
+        self.btn_delete = QPushButton("删除选中")
         self.btn_delete.clicked.connect(self._delete)
         row.addWidget(self.btn_open)
         row.addWidget(self.btn_delete)
@@ -265,6 +221,182 @@ class _BackupsDialog(QDialog):
             item.unlink(missing_ok=True)
         logger().info("删除存档备份：%d 份，释放 %d 字节", len(targets), freed)
         self._refresh()
+
+
+class _ProjectConfigDialog(QDialog):
+    """项目配置：名称、简介、封面、项目目录、默认存档位置。
+
+    工作界面上这些内容只做展示——看得到、按不坏，要改就进这个弹窗
+    （用户的诉求：项目名/简介/目录默认直接显示，点「项目配置」才能改）。
+
+    「移动项目」是搬整个目录的重活，仍旧走外面那套流程（登记表、记录索引
+    都要跟着更新），这里只负责把路径显示跟着刷新。
+    """
+
+    def __init__(self, project: Project, on_move, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("项目配置")
+        self.setMinimumWidth(560)
+        self.project = project
+        self._on_move = on_move
+        self._cover = ""                 # 选了新封面先记着，点确定才落地
+        self._save_root = project.save_root
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(design.METRICS.gap_md)
+
+        form = QFormLayout()
+        self.name_edit = QLineEdit(project.name)
+        self.name_edit.setPlaceholderText("项目名")
+        form.addRow("名称", self.name_edit)
+        layout.addLayout(form)
+
+        layout.addWidget(QLabel("简介"))
+        self.description_edit = QPlainTextEdit(project.description)
+        self.description_edit.setPlaceholderText("这个项目是做什么的")
+        self.description_edit.setFixedHeight(72)
+        layout.addWidget(self.description_edit)
+
+        cover_row = QHBoxLayout()
+        self.cover_preview = QLabel()
+        self.cover_preview.setFixedSize(64, 64)
+        self.cover_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover_row.addWidget(self.cover_preview)
+        self.btn_cover = QPushButton("选择封面图片")
+        self.btn_cover.clicked.connect(self._pick_cover)
+        self.btn_cover_clear = QPushButton("清除封面")
+        self.btn_cover_clear.clicked.connect(self._clear_cover)
+        cover_row.addWidget(self.btn_cover)
+        cover_row.addWidget(self.btn_cover_clear)
+        cover_row.addStretch(1)
+        layout.addLayout(cover_row)
+
+        self.directory_label = QLabel()
+        wrap(self.directory_label)
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(self.directory_label, 1)
+        self.btn_move = QPushButton("移动项目")
+        self.btn_move.setToolTip("把整个项目目录搬到别处，素材副本、记录、产物一起走")
+        self.btn_move.clicked.connect(self._move)
+        dir_row.addWidget(self.btn_move)
+        layout.addLayout(dir_row)
+
+        self.save_label = QLabel()
+        wrap(self.save_label)
+        save_row = QHBoxLayout()
+        save_row.addWidget(self.save_label, 1)
+        self.btn_pick_save = QPushButton("选择文件夹")
+        self.btn_pick_save.setToolTip("选含 level.dat 的那个存档文件夹")
+        self.btn_pick_save.clicked.connect(self._pick_save)
+        self.btn_clear_save = QPushButton("清除")
+        self.btn_clear_save.clicked.connect(self._clear_save)
+        save_row.addWidget(self.btn_pick_save)
+        save_row.addWidget(self.btn_clear_save)
+        layout.addLayout(save_row)
+
+        hint = QLabel("存档位置只影响这个项目的默认值，导出时仍旧可以改。")
+        wrap(hint)
+        design.set_role(hint, "hint")
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._refresh()
+
+    # ---- 显示 ----
+
+    def _refresh(self) -> None:
+        self.directory_label.setText("项目目录：%s" % self.project.path)
+        self.save_label.setText("默认存档：%s" % (self._save_root or "（未设置）"))
+        self.btn_clear_save.setEnabled(bool(self._save_root))
+        self._refresh_cover()
+
+    def _refresh_cover(self) -> None:
+        theme = design.theme()
+        dashed = (
+            "border:%dpx dashed %s; color:%s;"
+            % (design.METRICS.border_width, theme.border, theme.text_3)
+        )
+        if self._cover == _COVER_CLEAR:
+            self.cover_preview.setPixmap(QPixmap())
+            self.cover_preview.setText("无封面")
+            self.cover_preview.setStyleSheet(dashed)
+            self.btn_cover_clear.setEnabled(False)
+            return
+        if self._cover:
+            # 选了新图但还没确定：直接用文件里的像素预览
+            self.cover_preview.setPixmap(
+                QPixmap(self._cover).scaled(
+                    64, 64, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            self.cover_preview.setStyleSheet(
+                "border:%dpx solid %s;" % (design.METRICS.border_width, theme.border)
+            )
+            self.btn_cover_clear.setEnabled(True)
+            return
+        cover = self.project.cover_png()
+        if cover is None:
+            self.cover_preview.setPixmap(QPixmap())
+            self.cover_preview.setText("无封面")
+            self.cover_preview.setStyleSheet(dashed)
+            self.btn_cover_clear.setEnabled(False)
+            return
+        self.cover_preview.setPixmap(
+            QPixmap(str(cover)).scaled(
+                64, 64, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        self.cover_preview.setText("")
+        self.cover_preview.setStyleSheet(
+            "border:%dpx solid %s;" % (design.METRICS.border_width, theme.border)
+        )
+        self.btn_cover_clear.setEnabled(True)
+
+    # ---- 交互 ----
+
+    def _pick_cover(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "选择封面图片", "", "图片 (*.png *.jpg *.jpeg *.bmp);;所有文件 (*)"
+        )
+        if not chosen:
+            return
+        self._cover = chosen
+        self._refresh_cover()
+
+    def _clear_cover(self) -> None:
+        self._cover = _COVER_CLEAR       # 哨兵：确定时把封面删掉
+        self._refresh_cover()
+
+    def _move(self) -> None:
+        self._on_move()
+        self._refresh()
+
+    def _pick_save(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(self, "选择存档根目录")
+        if not chosen:
+            return
+        self._save_root = chosen
+        self._refresh()
+
+    def _clear_save(self) -> None:
+        self._save_root = ""
+        self._refresh()
+
+    def values(self) -> dict:
+        return {
+            "name": self.name_edit.text().strip(),
+            "description": self.description_edit.toPlainText(),
+            "save_root": self._save_root,
+            "cover": self._cover,
+        }
 
 
 class _RetentionDialog(QDialog):
@@ -340,7 +472,7 @@ class _ChunkQueryDialog(QDialog):
         self.world = QLineEdit(project.save_root)
         self.world.setMinimumWidth(420)
         self.world.setPlaceholderText("存档根目录（含 level.dat 的那个文件夹）")
-        pick = QPushButton("浏览…")
+        pick = QPushButton("选择文件夹")
         pick.clicked.connect(self._pick_world)
         world_row = QHBoxLayout()
         world_row.addWidget(self.world, 1)
@@ -496,6 +628,7 @@ class ProjectWindow(QMainWindow):
         self._pending: ExportRecord | None = None
         self._rebuild_record: ExportRecord | None = None
         self._force_recompose = False
+        self._faded_in = False
 
         self.setWindowTitle("项目 · %s" % project.name)
         self.resize(1000, 760)
@@ -506,6 +639,14 @@ class ProjectWindow(QMainWindow):
         logger().info("打开项目：%s（%s）", project.name, project.path)
 
     # ---- 界面 ------------------------------------------------------------
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """第一次显示时淡入一次。"""
+
+        super().showEvent(event)
+        if not self._faded_in:
+            self._faded_in = True
+            design.motion.fade_in(self.centralWidget())
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -550,6 +691,7 @@ class ProjectWindow(QMainWindow):
         box = QWidget()
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(design.METRICS.gap_md)
 
         self.cover = ClickableLabel()
         self.cover.setFixedSize(96, 96)
@@ -560,47 +702,38 @@ class ProjectWindow(QMainWindow):
         row.addWidget(self.cover, 0, Qt.AlignmentFlag.AlignTop)
 
         fields = QVBoxLayout()
-        self.name_edit = QLineEdit(self.project.name)
-        self.name_edit.setFont(QFont("", 13, QFont.Weight.Bold))
-        self.name_edit.setPlaceholderText("项目名")
-        self.name_edit.editingFinished.connect(self._save_basic)
-        fields.addWidget(self.name_edit)
+        fields.setSpacing(design.METRICS.gap_sm)
 
-        self.description_edit = QPlainTextEdit(self.project.description)
-        self.description_edit.setPlaceholderText("描述（给未来的自己看：这个项目是干什么的）")
-        self.description_edit.setFixedHeight(56)
-        # 失焦即存：用事件过滤器而不是给实例赋 focusOutEvent（虚函数派发不稳）
-        self.description_edit.installEventFilter(self)
-        fields.addWidget(self.description_edit)
+        # 名称 / 简介 / 目录都是只读展示：改内容统一走「项目配置」弹窗
+        self.name_label = QLabel()
+        wrap(self.name_label)
+        design.set_role(self.name_label, "title")
+        fields.addWidget(self.name_label)
+
+        self.description_label = QLabel()
+        wrap(self.description_label)
+        design.set_role(self.description_label, "hint")
+        self.description_label.setMinimumHeight(34)
+        fields.addWidget(self.description_label)
 
         path_row = QHBoxLayout()
+        path_row.setSpacing(design.METRICS.gap_sm)
         self.directory_label = QLabel()
         wrap(self.directory_label)      # 路径很长，不折行会把整页撑宽
         self.directory_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
+        design.set_role(self.directory_label, "dim")
         open_button = QPushButton("打开目录")
         open_button.clicked.connect(lambda: self._open_path(self.project.path))
-        move_button = QPushButton("移动…")
-        move_button.clicked.connect(self._move_project)
+        self.btn_project_config = QPushButton("项目配置")
+        self.btn_project_config.setToolTip("改名称、简介、封面、项目目录与默认存档位置")
+        self.btn_project_config.clicked.connect(self._edit_project_config)
         path_row.addWidget(self.directory_label, 1)
         path_row.addWidget(open_button)
-        path_row.addWidget(move_button)
+        path_row.addWidget(self.btn_project_config)
         fields.addLayout(path_row)
         row.addLayout(fields, 1)
-
-        status_box = QVBoxLayout()
-        self.package_status = QLabel()
-        wrap(self.package_status)
-        # 别被挤成竖条：这行文字在窄列里会一个字一行（中文没有空格），
-        # 给个下限宽度、并让它吃右侧剩余空间（原先固定 0 拉伸）。
-        self.package_status.setMinimumWidth(220)
-        status_box.addWidget(self.package_status)
-        self.btn_recompose = QPushButton("重新组合素材")
-        self.btn_recompose.clicked.connect(lambda: self._compose(force=True, report=True))
-        status_box.addWidget(self.btn_recompose)
-        status_box.addStretch(1)
-        row.addLayout(status_box, 1)
         return box
 
     def _build_save_box(self) -> QGroupBox:
@@ -608,21 +741,24 @@ class ProjectWindow(QMainWindow):
         layout = QVBoxLayout(box)
 
         row = QHBoxLayout()
-        self.save_edit = QLineEdit(self.project.save_root)
-        self.save_edit.setPlaceholderText("本项目默认的存档根目录（含 level.dat 的那个文件夹）")
-        self.save_edit.editingFinished.connect(self._save_basic)
-        browse = QPushButton("浏览…")
-        browse.clicked.connect(self._pick_save)
-        row.addWidget(QLabel("默认存档"))
-        row.addWidget(self.save_edit, 1)
-        row.addWidget(browse)
+        row.setSpacing(design.METRICS.gap_sm)
+        row.addWidget(QLabel("默认存档位置"))
+        # 只显示位置：改位置在「项目配置」里
+        self.save_label = QLabel()
+        wrap(self.save_label)
+        self.save_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        design.set_role(self.save_label, "dim")
+        row.addWidget(self.save_label, 1)
         layout.addLayout(row)
 
         backup_row = QHBoxLayout()
-        self.btn_backup = QPushButton("备份存档…")
+        backup_row.setSpacing(design.METRICS.gap_sm)
+        self.btn_backup = QPushButton("备份存档")
         self.btn_backup.setToolTip("把整个存档打成一个 zip 存进项目目录（inputs/saves/）")
         self.btn_backup.clicked.connect(self._backup_save)
-        self.btn_backups = QPushButton("管理备份…")
+        self.btn_backups = QPushButton("管理备份")
         self.btn_backups.setToolTip("看已有的备份、打开、删掉不想留的")
         self.btn_backups.clicked.connect(self._manage_backups)
         self.backup_label = QLabel()
@@ -644,8 +780,9 @@ class ProjectWindow(QMainWindow):
         layout.addWidget(self.bindings)
 
         row = QHBoxLayout()
+        row.setSpacing(design.METRICS.gap_sm)
         for name, label, slot in (
-            ("btn_add_material", "添加…", self._add_materials),
+            ("btn_add_material", "添加素材", self._add_materials),
             ("btn_remove_material", "从项目移除", self._remove_material),
             ("btn_material_up", "上移 ↑", lambda: self._move_material(-1)),
             ("btn_material_down", "下移 ↓", lambda: self._move_material(1)),
@@ -656,6 +793,21 @@ class ProjectWindow(QMainWindow):
             row.addWidget(button)
         row.addStretch(1)
         layout.addLayout(row)
+
+        # 组合状态与「重新组合素材」跟着素材放（用户：组合本来就该和素材在一栏）
+        layout.addWidget(design.separator())
+        status_row = QHBoxLayout()
+        status_row.setSpacing(design.METRICS.gap_sm)
+        self.package_status = QLabel()
+        wrap(self.package_status)
+        # 别被挤成竖条：这行文字在窄列里会一个字一行（中文没有空格），
+        # 给个下限宽度、并让它吃右侧剩余空间（原先固定 0 拉伸）。
+        self.package_status.setMinimumWidth(220)
+        status_row.addWidget(self.package_status, 1)
+        self.btn_recompose = QPushButton("重新组合素材")
+        self.btn_recompose.clicked.connect(lambda: self._compose(force=True, report=True))
+        status_row.addWidget(self.btn_recompose)
+        layout.addLayout(status_row)
         return box
 
     def _build_history_box(self) -> QGroupBox:
@@ -677,16 +829,20 @@ class ProjectWindow(QMainWindow):
         self.history.setMaximumHeight(200)      # 同上：表格的 sizeHint 也是 256 起步
         self.history.verticalHeader().setVisible(False)
         self.history.horizontalHeader().setStretchLastSection(True)
+        # 选中才有对象的动作要跟着选中状态亮/灭
+        self.history.itemSelectionChanged.connect(self._update_history_buttons)
         layout.addWidget(self.history)
 
         row = QHBoxLayout()
+        row.setSpacing(design.METRICS.gap_sm)
         for name, label, slot in (
             ("btn_open_output", "打开产物目录", self._open_selected_output),
             ("btn_open_job", "打开 job.json", self._open_selected_job),
-            ("btn_rebuild", "重建贴图…", self._rebuild_selected),
-            ("btn_query", "查询区块…", self._query_chunks),
-            ("btn_forget", "只删记录", self._forget_selected),
-            ("btn_delete", "连产物一起删…", self._delete_selected),
+            ("btn_pack", "打包成 zip", self._pack_selected),
+            # 「重建贴图」实际是拿 job.json 回库重跑一遍，叫「重新导出模型」才如实
+            ("btn_rebuild", "重新导出模型", self._rebuild_selected),
+            ("btn_query", "查询区块", self._query_chunks),
+            ("btn_delete", "删除记录", self._delete_selected),
         ):
             button = QPushButton(label)
             button.clicked.connect(slot)
@@ -711,14 +867,15 @@ class ProjectWindow(QMainWindow):
         layout.addWidget(self.storage_legend)
 
         row = QHBoxLayout()
-        self.btn_prune = QPushButton("清理没被引用的贴图…")
+        row.setSpacing(design.METRICS.gap_sm)
+        self.btn_prune = QPushButton("清理未引用贴图")
         self.btn_prune.setToolTip(
             "删掉贴图库里没有任何导出记录引用的图（不会删产物与记录）"
         )
         self.btn_prune.clicked.connect(self._prune_textures)
-        self.btn_clean_outputs = QPushButton("清理旧产物…")
+        self.btn_clean_outputs = QPushButton("清理旧产物")
         self.btn_clean_outputs.clicked.connect(self._clean_outputs)
-        self.btn_retention = QPushButton("保留策略…")
+        self.btn_retention = QPushButton("保留策略")
         self.btn_retention.setToolTip(
             "只保留最近 N 次 / 超过 X 天 / 总大小上限；默认什么都不自动删"
         )
@@ -737,29 +894,23 @@ class ProjectWindow(QMainWindow):
 
     def storage_legend_hover(self, index: int) -> None:
         """条上悬停 → 图例那一行也淡出/高亮，两边指向同一个类别。"""
-        rows = [
-            self.storage_legend.itemAt(i).widget()
-            for i in range(self.storage_legend.layout().count())
-        ]
-        for row_index, row in enumerate(rows):
-            if row is None:
-                continue
-            row.setStyleSheet(
-                "" if index < 0 or index == row_index
-                else "color: palette(mid);"
-            )
+        # 注意：storage_legend 是控件（StorageLegend），不是布局——
+        # 早先这里对它调 itemAt()，每次悬停都抛 AttributeError。
+        for row_index, row in enumerate(self.storage_legend.rows()):
+            row.set_dimmed(index >= 0 and index != row_index)
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
 
         materials = bar.addMenu("素材(&M)")
-        materials.addAction("材质管理…", self._open_material_manager)
-        materials.addAction("添加素材到本项目…", self._add_materials)
+        materials.addAction("材质管理", self._open_material_manager)
+        materials.addAction("添加素材到本项目", self._add_materials)
 
         project_menu = bar.addMenu("项目(&P)")
+        project_menu.addAction("项目配置", self._edit_project_config)
         project_menu.addAction("打开项目目录", lambda: self._open_path(self.project.path))
-        project_menu.addAction("导出项目配置…", self._export_config)
-        project_menu.addAction("从配置包导入到本项目…", self._import_config_into)
+        project_menu.addAction("导出项目配置包", self._export_config)
+        project_menu.addAction("从配置包导入到本项目", self._import_config_into)
         project_menu.addSeparator()
         project_menu.addAction("关闭项目界面", self.close)
 
@@ -779,17 +930,10 @@ class ProjectWindow(QMainWindow):
             button.setProperty("size", "large")
             button.setMinimumHeight(design.METRICS.button_large_height)
 
-    def eventFilter(self, source, event) -> bool:  # noqa: N802
-        # 描述框失焦就存盘（和名称框的 editingFinished 一个意思）
-        if source is self.description_edit and event.type() == QEvent.Type.FocusOut:
-            self._save_basic()
-        return super().eventFilter(source, event)
-
     # ---- 刷新 ------------------------------------------------------------
 
     def _refresh_all(self) -> None:
-        self.directory_label.setText("目录：%s" % self.project.path)
-        design.set_role(self.directory_label, "dim")
+        self._refresh_basic()
         self._refresh_cover()
         self._refresh_bindings()
         self._refresh_package_status()
@@ -801,7 +945,17 @@ class ProjectWindow(QMainWindow):
             if backups
             else "还没有备份过"
         )
-        self.btn_backup.setEnabled(bool(self.save_edit.text().strip()))
+
+    def _refresh_basic(self) -> None:
+        """名称 / 简介 / 目录 / 存档位置：界面上只读，改要走「项目配置」。"""
+
+        name = self.project.name or "未命名项目"
+        self.name_label.setText(name)
+        self.description_label.setText(self.project.description or "（还没有简介）")
+        self.directory_label.setText("目录：%s" % self.project.path)
+        self.save_label.setText(self.project.save_root or "（未设置）")
+        self.btn_backup.setEnabled(bool(self.project.save_root))
+        self.setWindowTitle("项目 · %s" % name)
 
     def _refresh_cover(self) -> None:
         cover = self.project.cover_png()
@@ -881,15 +1035,23 @@ class ProjectWindow(QMainWindow):
                 self.history.setItem(row, column, QTableWidgetItem(text))
             self.history.item(row, 0).setData(Qt.ItemDataRole.UserRole, record.id)
         self.history.resizeColumnsToContents()
-        has_rows = bool(records)
-        for name in ("btn_open_output", "btn_open_job", "btn_forget", "btn_delete",
-                     "btn_rebuild"):
-            getattr(self, name).setEnabled(has_rows)
-        self.btn_forget.setEnabled(has_rows)
-        self.btn_delete.setEnabled(has_rows)
+        self.history.clearSelection()
+        self._update_history_buttons()
+
+    def _update_history_buttons(self) -> None:
+        """只对"选中的那条记录"生效的按钮：没选就禁掉。
+
+        以前它们跟着"有没有记录"亮灭，结果一条没选也能按下去——按了没反应，
+        或者更糟：按到别的动作上。（查询区块跟选中无关，永远是亮的。）
+        """
+
+        has_selection = bool(self.history.selectionModel().selectedRows())
+        for name in ("btn_open_output", "btn_open_job", "btn_pack",
+                     "btn_rebuild", "btn_delete"):
+            getattr(self, name).setEnabled(has_selection)
 
     def _texture_summary(self, record: ExportRecord) -> str:
-        """这条记录的贴图还在不在——不在就要靠「重建贴图」补回来。"""
+        """这条记录的贴图还在不在——不在就要靠「重新导出模型」补回来。"""
         if not record.textures:
             return "—"
         missing = [
@@ -927,30 +1089,39 @@ class ProjectWindow(QMainWindow):
 
     # ---- 基本配置 --------------------------------------------------------
 
-    def _save_basic(self) -> None:
+    def _edit_project_config(self) -> None:
+        """项目配置弹窗：名称 / 简介 / 封面 / 项目目录 / 默认存档位置。
+
+        界面上这些都只读展示——要改就到这里来（一次改完、一次落盘）。
+        """
+
+        dialog = _ProjectConfigDialog(self.project, self._move_project, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._apply_project_config(dialog.values())
+
+    def _apply_project_config(self, values: dict) -> None:
         changed = False
-        name = self.name_edit.text().strip()
+        name = values["name"].strip()
         if name and name != self.project.name:
             self.project.name = name
-            self.setWindowTitle("项目 · %s" % name)
             changed = True
-        if self.description_edit.toPlainText() != self.project.description:
-            self.project.description = self.description_edit.toPlainText()
+        if values["description"] != self.project.description:
+            self.project.description = values["description"]
             changed = True
-        save_root = self.save_edit.text().strip()
-        if save_root != self.project.save_root:
-            self.project.save_root = save_root
+        if values["save_root"] != self.project.save_root:
+            self.project.save_root = values["save_root"]
             changed = True
-            self.btn_backup.setEnabled(bool(save_root))
         if changed:
             self.project.save()
             self.config.save()
-
-    def _pick_save(self) -> None:
-        chosen = QFileDialog.getExistingDirectory(self, "选择存档根目录")
-        if chosen:
-            self.save_edit.setText(chosen)
-            self._save_basic()
+        cover = values.get("cover") or ""
+        if cover == _COVER_CLEAR:
+            self.project.clear_cover()
+        elif cover:
+            self.project.set_cover(cover)
+        logger().info("项目配置已更新：%s（%s）", self.project.name, self.project.path)
+        self._refresh_all()
 
     def _change_cover(self) -> None:
         chosen, _ = QFileDialog.getOpenFileName(
@@ -1025,7 +1196,7 @@ class ProjectWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "素材库是空的",
-                "先在「素材 → 材质管理…」里导入原版客户端 jar / 资源包 / 模组，"
+                "先在「素材 → 材质管理」里导入原版客户端 jar / 资源包 / 模组，"
                 "再回来绑定到项目。",
             )
             return
@@ -1176,7 +1347,6 @@ class ProjectWindow(QMainWindow):
         if package is None:
             return
         self.project.save_root = save_root
-        self.save_edit.setText(save_root)
         self.config.remember_save(save_root)
 
         selection = dialog.selection()
@@ -1185,6 +1355,7 @@ class ProjectWindow(QMainWindow):
         job = dialog.result_job(assets_package=package, output_dir=str(out_dir))
         self.project.options = dict(job.get("options") or {})
         self.project.save()
+        self._refresh_basic()        # 存档位置可能刚被改过，界面上要跟着变
         self.config.last_export = dict(self.project.options)
         self.config.save()
 
@@ -1314,10 +1485,14 @@ class ProjectWindow(QMainWindow):
         pending.seconds = float(result.get("seconds") or 0.0)
         self.store.add(pending)
         self.panel.log_line("已记入历史：%s" % pending.id)
+        self.panel.log_line(
+            "要拷到别处用（发人或换机器）：选中这条记录 → 「打包成 zip」，"
+            "会把模型、MTL 与用到的贴图收成一个 zip。"
+        )
         self._refresh_history()
         self._refresh_storage()
 
-    # ---- 重建贴图 --------------------------------------------------------
+    # ---- 重新导出模型（补回贴图） -----------------------------------------
     #
     # 清理是有底线的：删掉的只能是"算力能买回来的东西"（§7.6）。所以每次导出都把
     # 当时的 job.json 留在产物目录里，贴图没了就照着它重跑一遍，把图补回库里。
@@ -1333,24 +1508,24 @@ class ProjectWindow(QMainWindow):
         if not job_path.is_file():
             QMessageBox.information(
                 self,
-                "重建不了",
+                "无法重新导出",
                 "这条记录没有留下 job.json（只有项目模式下导出才会留），\n"
-                "没法精确重建当时那套输入。",
+                "没法按当时那套输入重跑一遍。",
             )
             return
         package = self.project.package_dir
         if not (package / "block_textures.tsv").is_file():
             QMessageBox.information(
                 self,
-                "重建不了",
+                "无法重新导出",
                 "项目里还没有素材包（%s）。\n\n先在「素材」里绑定素材并组合一次，"
-                "重建要靠它。" % package,
+                "重新导出要靠它。" % package,
             )
             return
         try:
             job = json.loads(job_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            QMessageBox.warning(self, "重建不了", "job.json 读不出来：%s" % error)
+            QMessageBox.warning(self, "无法重新导出", "job.json 读不出来：%s" % error)
             return
 
         missing = [
@@ -1360,13 +1535,13 @@ class ProjectWindow(QMainWindow):
         ]
         if record.textures and not missing and (
             QMessageBox.question(
-                self, "贴图都在", "这条记录用到的贴图在库里都还在，还要重跑一遍吗？"
+                self, "贴图都还在", "这条记录用到的贴图在库里都还在，还要重跑一遍吗？"
             )
             != QMessageBox.StandardButton.Yes
         ):
             return
 
-        # 输出到项目里的临时目录：重建只为贴图，不该覆盖原来的产物
+        # 输出到项目里的临时目录：重跑只为补贴图，不该覆盖原来的产物
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         temp_dir = self.project.path / "tmp" / ("rebuild_%s" % stamp)
         output = dict(job.get("output") or {})
@@ -1375,7 +1550,7 @@ class ProjectWindow(QMainWindow):
         job["assets"] = {"package": str(package)}
         self._rebuild_record = record
         self.panel.log_line(
-            "重建贴图：%s（记录 %d 张，缺 %d 张）"
+            "重新导出模型：%s（记录 %d 张贴图，缺 %d 张）"
             % (record.id, len(record.textures), len(missing))
         )
         if not self.panel.run(job, _cli_path(self.config)):
@@ -1388,28 +1563,28 @@ class ProjectWindow(QMainWindow):
             return
         obj = result.get("obj") if ok else None
         if not obj:
-            self.panel.log_line("重建失败：没有产出，记录保持不变。")
+            self.panel.log_line("重新导出失败：没有产出，记录保持不变。")
             return
         obj_path = Path(str(obj))
         try:
             absorbed = run_in_background(
                 self,
-                "重建贴图",
-                "正在把重新烘焙的贴图收进项目贴图库…",
+                "重新导出模型",
+                "正在把重新烘焙出来的贴图收进项目贴图库…",
                 lambda: absorb(self.project.path, obj_path),
             )
         except Exception as error:
-            logger().exception("重建贴图失败：%s", record.id)
-            QMessageBox.warning(self, "重建失败", str(error))
+            logger().exception("重新导出模型失败：%s", record.id)
+            QMessageBox.warning(self, "重新导出失败", str(error))
             return
         before = len(record.textures)
         record.textures = sorted(set(record.textures) | set(absorbed))
         self.store.add(record)
-        # 重建用的临时产物没有价值：贴图已经进库了
+        # 重跑出来的临时产物没有价值：贴图已经进库了
         if is_inside(obj_path.parent, self.project.path):
             shutil.rmtree(obj_path.parent, ignore_errors=True)
         self.panel.log_line(
-            "重建完成：记录里现在有 %d 张贴图（原有 %d 张，这次补回 %d 张）"
+            "重新导出完成：记录里现在有 %d 张贴图（原有 %d 张，这次补回 %d 张）"
             % (len(record.textures), before, len(record.textures) - before)
         )
         self._refresh_history()
@@ -1441,41 +1616,64 @@ class ProjectWindow(QMainWindow):
         else:
             QMessageBox.information(self, "没有 job.json", "这次的记录里没有 job.json。")
 
-    def _forget_selected(self) -> None:
+    def _pack_selected(self) -> None:
+        """把选中的那条记录打成 zip：模型 + MTL + 贴图，方便拷到别处。"""
+
         records = self._selected_records()
         if not records:
             return
-        if (
-            QMessageBox.question(
+        record = records[0]
+        obj = self.project.path / (record.obj or (record.output_dir + "/model.obj"))
+        if not obj.is_file():
+            QMessageBox.information(
                 self,
-                "只删记录",
-                "删掉这 %d 条记录？\n\n产物目录会留下（贴图库里没人引用的图之后可以清理）。"
-                % len(records),
+                "找不到模型",
+                "这条记录的模型文件不在了：\n%s\n\n"
+                "产物目录被清理过的话，用「重新导出模型」重跑一遍再来打包。" % obj,
             )
-            != QMessageBox.StandardButton.Yes
-        ):
             return
-        self.store.remove([r.id for r in records])
-        self._refresh_history()
-        self._refresh_storage()
+        self.panel.pack_obj(obj)
 
     def _delete_selected(self) -> None:
+        """删记录：只删记录 / 连产物一起删，合成一个按钮 + 一个弹窗说清楚。
+
+        以前是两个按钮（「只删记录」「连产物一起删…」），容易看错眼按错；
+        现在按下去先问，怎么删由用户在那个弹窗里选。
+        """
+
         records = self._selected_records()
         if not records:
             return
         total = sum(r.size_bytes(self.project.path) for r in records)
-        if (
-            QMessageBox.question(
-                self,
-                "连产物一起删",
-                "删掉这 %d 条记录和它们的产物目录？\n\n将释放约 %s。\n"
-                "项目贴图库里被其它记录引用的贴图不会动。"
-                % (len(records), human_size(total)),
+
+        box = QMessageBox(self)
+        box.setWindowTitle("删除记录")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("要删掉选中的 %d 条记录吗？" % len(records))
+        box.setInformativeText(
+            "仅删除记录：产物目录留在磁盘上（约 %s），之后可以手动清理。\n"
+            "记录与产物一起删除：同时删掉产物目录，释放约 %s。\n\n"
+            "项目贴图库里被其它记录引用的贴图不会动，SNBT 输入副本与存档备份不受影响。"
+            % (human_size(total), human_size(total))
+        )
+        only_record = box.addButton("仅删除记录", QMessageBox.ButtonRole.AcceptRole)
+        with_output = box.addButton(
+            "记录与产物一起删除", QMessageBox.ButtonRole.DestructiveRole
+        )
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(only_record)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is only_record:
+            self.store.remove([r.id for r in records])
+            self.panel.log_line("删除记录：%d 条（产物保留）" % len(records))
+        elif clicked is with_output:
+            self.store.remove_with_outputs([r.id for r in records])
+            self.panel.log_line(
+                "删除记录与产物：%d 条，释放约 %s" % (len(records), human_size(total))
             )
-            != QMessageBox.StandardButton.Yes
-        ):
+        else:
             return
-        self.store.remove_with_outputs([r.id for r in records])
         self._refresh_history()
         self._refresh_storage()
 
@@ -1505,7 +1703,7 @@ class ProjectWindow(QMainWindow):
             int(self.project.keep_days or 0),
             int(self.project.keep_size_mb or 0),
         ):
-            self.retention_label.setText("保留策略：不自动清理（只按你点的按钮删）。")
+            self.retention_label.setText("保留策略：不自动清理（只在手动操作时清理）。")
             self.btn_clean_outputs.setToolTip("只保留最近 N 次，其余连产物一起删")
             return
         plan = self._retention_plan()
@@ -1513,8 +1711,8 @@ class ProjectWindow(QMainWindow):
             self.retention_label.setText("保留策略：已生效，当前没有需要清理的导出。")
         else:
             self.retention_label.setText(
-                "保留策略：可清理 %d 次旧导出，约 %s（打开「保留策略…」可调整，"
-                "或点「清理旧产物…」现在清）"
+                "保留策略：可清理 %d 次旧导出，约 %s（打开「保留策略」可调整，"
+                "或点「清理旧产物」现在清）"
                 % (len(plan.victims), human_size(plan.freed))
             )
 
@@ -1645,9 +1843,14 @@ class ProjectWindow(QMainWindow):
     # ---- 备份与项目配置 --------------------------------------------------
 
     def _backup_save(self) -> None:
-        save_root = self.save_edit.text().strip()
+        save_root = self.project.save_root
         if not save_root or not Path(save_root).is_dir():
-            QMessageBox.warning(self, "找不到存档", "请先选一个存在的存档目录。")
+            QMessageBox.warning(
+                self,
+                "找不到存档",
+                "默认存档位置没有设置，或者指向的目录已经不在了。\n\n"
+                "在「项目配置」里选一个存在的存档目录。",
+            )
             return
         try:
             archive = run_in_background(
@@ -1716,8 +1919,6 @@ class ProjectWindow(QMainWindow):
         if imported.cover:
             self.project.cover = imported.cover
         self.project.save()
-        self.name_edit.setText(self.project.name)
-        self.description_edit.setPlainText(self.project.description)
         self._force_recompose = True
         self._refresh_all()
         QMessageBox.information(
@@ -1735,7 +1936,7 @@ class ProjectWindow(QMainWindow):
             "· 产物按时间戳新建目录，只往里写，不覆盖旧的\n"
             "· 贴图按内容哈希存进项目的 textures/，多次导出共用同一张\n"
             "· 记录写在 records/，用于查询「哪个区块导过、什么时候」\n\n"
-            "素材来自你自己的游戏与资源包，本工具只读取、不附带也不分发。",
+            "素材来自本机游戏与资源包，本工具只读取、不附带、不分发。",
         )
 
     # ---- 杂项 ------------------------------------------------------------
@@ -1752,7 +1953,6 @@ class ProjectWindow(QMainWindow):
         default_open_directory(path if path.is_dir() else path.parent)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self._save_basic()
         self.closed.emit()
         super().closeEvent(event)
 

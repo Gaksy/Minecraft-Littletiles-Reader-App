@@ -141,6 +141,15 @@ class Project:
         self.save()
         return target
 
+    def clear_cover(self) -> None:
+        """清掉封面（连同项目目录里的那份副本）。"""
+
+        target = self.path / "cover.png"
+        if target.is_file():
+            target.unlink()
+        self.cover = ""
+        self.save()
+
     # ---- 存档 ------------------------------------------------------------
 
     def backups(self) -> list[Path]:
