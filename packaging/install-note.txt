@@ -1,0 +1,28 @@
+LittleTiles Reader {version}（macOS · Apple 芯片 · 未签名）
+
+一、怎么装
+    把「LittleTilesReader」这个【文件夹】整个拖到「应用程序」，或者任何你想要的位置。
+
+    注意：一定要拖整个文件夹，不要只把里面的 LittleTilesReader.app 拖出来。
+    客户端要跟同目录下的这两个东西配合才能导出：
+        LittleTilesReader     库的核心程序（真正干活的）
+        libnbt++.dylib        它依赖的动态库
+    只拖 .app 出来 = 界面能开，一按导出就报“找不到 LittleTilesReader”。
+
+二、第一次打开会被系统拦（因为没有开发者签名）
+    三选一即可：
+      a) 右键点 LittleTilesReader.app → 选「打开」→ 再点一次「打开」；
+      b) 打开终端执行（路径换成你实际放的位置）：
+         xattr -dr com.apple.quarantine "/Applications/LittleTilesReader"
+      c) 系统设置 → 隐私与安全性 → 找到被拦的提示 → 点「仍要打开」。
+
+三、首次启动
+    会先显示许可协议（应用自身 MIT、Qt LGPL、字体 OFL，以及库用到的
+    CGAL GPL / Boost BSL / libnbt++ LGPL / zlib）。勾选后才能继续。
+
+四、数据放在哪
+    config / logs / outputs 就生成在应用文件夹里（便携：整个文件夹拷走就带走）。
+    若所在位置没有写权限，会自动退到 ~/Library/Application Support/LittleTilesReader。
+
+五、卸载
+    删掉整个文件夹即可；除非上面那种回退情况，否则不在别处留东西。

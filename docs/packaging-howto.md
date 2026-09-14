@@ -152,7 +152,9 @@ python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader
 6. 拷 `LICENSE`、`THIRD-PARTY.md`、`README-unsigned.md`、
    `GPL-3.0.txt`、`LGPL-3.0.txt`、`OFL.txt`；
 7. 做一次 ad-hoc 签名（macOS，改过 Mach-O 之后必须重签，否则 arm64 上直接被杀）；
-8. 打 zip（macOS 用 `ditto`）并打印 **SHA-256**。
+8. **打 DMG**（macOS，`hdiutil`）——这才是 macOS 用户习惯的"安装包"，见下方
+   "DMG 里为什么是一个文件夹"；
+9. 打 zip（macOS 用 `ditto`）并打印两个 **SHA-256**（DMG 与 zip 各一个）。
 
 ### 为什么会有"显式收集运行时模块"这一步
 
@@ -190,6 +192,31 @@ otool -L dist/app/LittleTilesReader-*/LittleTilesReader
 #   @executable_path/libnbt++.dylib   ← 必须是这个，不能是 @rpath 或绝对路径
 ```
 
+### DMG 里为什么是"一个文件夹"而不是散着的文件
+
+macOS 用户的习惯是"打开 DMG → 把 app 拖进 Applications"，但这个应用的拖拽单元
+**必须是文件夹**：
+
+```
+LittleTiles Reader 0.1.0（磁盘映像卷）
+├── LittleTilesReader/        ← 拖这个（里面才是 .app + CLI + dylib + 许可）
+│   ├── LittleTilesReader.app
+│   ├── LittleTilesReader     ← 库的 CLI，客户端按"同目录"找它
+│   ├── libnbt++.dylib
+│   └── LICENSE / THIRD-PARTY.md / README-unsigned.md / OFL.txt / licenses/
+├── Applications -> /Applications   ← 按 macOS 习惯指个方向
+└── 安装说明.txt               ← packaging/install-note.txt 生成的面向用户的说明
+```
+
+散开放（根目录直接是 `.app` + CLI + dylib）的话，用户十有八九只把 `.app` 拖走，
+结果就是"界面能开、一按导出就报找不到 LittleTilesReader"。所以 DMG 里放整个文件夹，
+并在「安装说明.txt」第一段就写清楚"要拖整个文件夹"。
+
+DMG 用 `hdiutil create -format UDZO -fs HFS+` 打（UDZO = 压缩只读，HFS+ 兼容性更好）；
+卷里的内容用 `shutil.copytree(..., symlinks=True)` 拷，**软链必须保住**，理由同下。
+自检时挂上去直接跑一遍：`hdiutil attach … -mountpoint …` 后
+`…/LittleTilesReader/LittleTilesReader.app/Contents/MacOS/LittleTilesReader --self-check`。
+
 ### 为什么 zip 用 ditto 而不是 Python 的 zipfile
 
 Python 的 `zipfile` **不认软链**，会把 `.app` 里 `Frameworks` ↔ `Resources` 之间的软链
@@ -224,7 +251,8 @@ dist/app/LittleTilesReader-<版本>-<平台>/
 ├── LICENSE / THIRD-PARTY.md / README-unsigned.md / OFL.txt
 ├── licenses/                      # LGPL-3.0 + （含库时）GPL-3.0 / BSL-1.0 / zlib
 └── （首次运行后自动生成）config/ logs/ outputs/ tmp/
-dist/app/LittleTilesReader-<版本>-<平台>.zip   ← 上传这个
+dist/app/LittleTilesReader-<版本>-macos-arm64.dmg   ← macOS 用户下载这个（双击挂载）
+dist/app/LittleTilesReader-<版本>-<平台>.zip        ← 通用/备用，Windows 只有这个
 ```
 
 > macOS 的包**只有 `.app`**，没有裸 onedir（原因见上一节）。`LittleTilesReader`
@@ -336,19 +364,24 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 * ⑤ 的日志：`应用目录: …`、`像素字体已加载`、`库版本：0.2.0-beta（…/LittleTilesReader）`、
   `库 CLI: …（存在=True）` —— 客户端确实找到并调起了同目录的 CLI；
 * 首次启动的许可弹窗确认"不勾选点不动同意"（按钮初值是 `setEnabled(False)`）；
-* 体积：目录 **113.2 MB**、zip **39.6 MB**；
-* 脚本自检：`tests/` 下 23 个脚本全过。
+* 体积：目录 **113.3 MB**、zip **39.6 MB**、DMG **44.8 MB**；
+* DMG 挂上去再跑一遍自检 + 隔离环境真实导出，同样通过；
+* 脚本自检：`tests/` 下 25 个脚本全过。
 
 ---
 
 ## 5. 发布（把包挂到网站上）
 
-1. 把 zip 传到发布位置（GitHub Release / 对象存储 / 服务器 `/uploads`），拿到直链；
+1. 把包传到发布位置（GitHub Release / 对象存储 / 服务器 `/uploads`），拿到直链：
+   * **macOS 挂 DMG**（`LittleTilesReader-<版本>-macos-arm64.dmg`）——用户下载后双击就能
+     看到「安装说明.txt」和「应用程序」软链，这才是 macOS 的习惯姿势；
+   * zip 也一起传（有的环境只让传 zip，且 Windows 包本来就只有 zip）；
 2. 后台「网页内容管理 → LT 读取器 → 客户端下载」里填：
    - 平台：`windows` 或 `macos-arm`（**服务器只认这两个键**，见 `lt_read_download`）；
    - 版本号：与包里 `app/__init__.py` 的 `__version__` **保持一致**
      （客户端的"检查更新"就是拿它比大小的）；
-   - 下载地址：直链；备注里写大小 + **SHA-256 前 8 位**；
+   - 下载地址：直链；备注里写大小 + **SHA-256 前 8 位**（DMG 与 zip 各一个，
+     构建输出里都打了）；
 3. 前台 `/littletiles` 的下载弹窗会自动显示；客户端点「检查更新」也会提示新版。
 
 > 形态 B 的包，发布说明里要写清"含 GPL-3.0-or-later 组件，源码见 <仓库>"，
@@ -374,6 +407,7 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 | 导出产物找不到 | 数据目录就在应用文件夹（首次运行后出现 `outputs/`）；也看「关于」与日志里写的路径 |
 | 想知道包多大 | 真机实测（macOS ARM，形态 B）：目录 **113 MB**、zip **39.6 MB**；明显更大先看有没有把裸 onedir 也发了（应该只有 `.app`），再查 `EXCLUDES` |
 | 每点一次导出就多开一个客户端窗口（Windows） | 把"应用自己"当成库的 CLI 了。Windows 上两个 `LittleTilesReader.exe` 同名，一个在 `LittleTilesReader\` 里（应用），一个在上一层（CLI）。见 §8 第 5 条 |
+| DMG 打不开 / 挂载后是空的 | `hdiutil create` 失败会打印原因，但脚本不中断（zip 仍然可用）；先看构建输出里那行"DMG 制作失败"。另外别用 `-format UDZO` 之外的裸 `-srcfolder` 指向 `.app`——要指向**暂存目录**，否则卷里只有 app |
 
 ---
 

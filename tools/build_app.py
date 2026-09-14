@@ -402,6 +402,45 @@ def payload_size(folder: Path) -> int:
     return total
 
 
+def install_note() -> str:
+    """DMG 里的安装说明：`packaging/install-note.txt`，`{version}` 会被替换。"""
+
+    template = (ROOT / "packaging" / "install-note.txt").read_text(encoding="utf-8")
+    return template.replace("{version}", __version__)
+
+
+def make_dmg(folder: Path) -> Path | None:
+    """把整个包做成 DMG（macOS 用户习惯的那个"安装包"）。
+
+    卷里放的是**一个文件夹**，不是散着的文件：这套东西是"应用 + 同目录 CLI +
+    动态库"三件套，散开放最容易让人只拖走 .app（那就导不出模型了）。
+    旁边再放一个「应用程序」软链，按 macOS 的习惯指个方向。
+    """
+
+    stage = BUILD / "dmg"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+    # symlinks=True 必须带：.app 里 Frameworks ↔ Resources 之间全是软链，
+    # 拷成实体文件签名就废了（和 zip 必须用 ditto 是同一个道理）。
+    shutil.copytree(folder, stage / "LittleTilesReader", symlinks=True)
+    (stage / "Applications").symlink_to("/Applications")
+    (stage / "安装说明.txt").write_text(install_note(), encoding="utf-8")
+
+    image = folder.parent / (folder.name + ".dmg")
+    if image.exists():
+        image.unlink()
+    done = subprocess.run(
+        ["hdiutil", "create", "-volname", "LittleTiles Reader %s" % __version__,
+         "-srcfolder", str(stage), "-ov", "-format", "UDZO", "-fs", "HFS+", str(image)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if done.returncode != 0:
+        print("DMG 制作失败（zip 仍然可用）：%s" % (done.stderr or done.stdout or "").strip())
+        return None
+    return image
+
+
 def write_bundle_version(app: Path) -> None:
     """把 Info.plist 里的版本号写成真实版本（PyInstaller 默认 0.0.0）。"""
 
@@ -432,6 +471,8 @@ def main() -> int:
     parser.add_argument("--reader", metavar="PATH",
                         help="LittleTilesReader 的位置（默认按 ltgen.paths 自动找）")
     parser.add_argument("--no-zip", action="store_true", help="只出目录，不压缩")
+    parser.add_argument("--no-dmg", action="store_true",
+                        help="macOS 上不出 DMG（默认出；DMG 才是用户习惯的那个安装包）")
     parser.add_argument("--keep-buildinfo", action="store_true",
                         help="保留生成的 app/_buildinfo.py（默认保留；此开关只为显式表达）")
     args = parser.parse_args()
@@ -475,11 +516,17 @@ def main() -> int:
 
     total = payload_size(target)
     print("产物目录：%s（%s）" % (target, human(total)))
+    if sys.platform == "darwin" and not args.no_dmg:
+        image = make_dmg(target)
+        if image is not None and image.is_file():
+            print("安装包（DMG）：%s（%s）" % (image, human(image.stat().st_size)))
+            print("SHA-256：%s" % sha256(image))
     if not args.no_zip:
         archive = zip_dir(target)
         print("压缩包：%s（%s）" % (archive, human(archive.stat().st_size)))
         print("SHA-256：%s" % sha256(archive))
-        print("把上面这行 SHA-256 与下载地址填进后台「LT 读取器 → 客户端下载」即可。")
+    print("发布：macOS 传 DMG（用户双击挂载那个），zip 作为通用/备用；")
+    print("      把下载直链 + SHA-256 填进后台「LT 读取器 → 客户端下载」即可。")
     return 0
 
 
