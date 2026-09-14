@@ -177,6 +177,7 @@ docs/
 ├── design-system.md       界面设计系统（令牌 / 组件 / 文案规范）
 ├── update-and-feedback.md 检查更新与反馈上报（结合服务器现状的评估）
 ├── licenses.md            许可证审计（发布前必读：CGAL 的 GPL 影响与三种发布形态）
+├── packaging.md           打包方案（M5 评审稿：阻塞项、工具选型、体积估算、待拍板项）
 └── job.md                 与库的 job 契约（应用侧）
 ```
 
