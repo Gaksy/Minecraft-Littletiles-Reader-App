@@ -1,9 +1,12 @@
 """检查更新：拿服务器上的发布版本和应用自己的版本比一比。
 
-数据来源是服务器已有的公开接口 `GET /public/lt-read/downloads`
-（见 `docs/update-and-feedback.md` 的评估：现在只有平台、版本号、下载地址、备注，
-没有更新日志与最低版本）。平台只有两个：`windows` 与 `macos-arm`，
-和桌面端发布形态对得上。
+数据来源是公开接口 `GET /public/lt-read/downloads`：后台现在是**一次发布一条**，
+每条带渠道（`stable` 稳定版 / `beta` 测试版）、更新日志与发布时间，
+同一平台可以有很多历史版本。
+
+**客户端只认稳定版**：`channel != 'stable'` 的条目永远不会被当成更新——
+测试版是给愿意尝鲜的人去下载页自己拿的，不该弹到所有人脸上。
+平台只有两个：`windows` 与 `macos-arm`，和桌面端发布形态对得上。
 
 版本号做归一化比较：服务器写的是 `v1.0.0`，应用里是 `0.1.0`；
 还可能出现 `1.2.3-beta` / `1.2.3+build`。比较规则保守——**认不出来就不提示**，
@@ -33,6 +36,10 @@ class Release:
     url: str
     note: str
     ready: bool
+    #: stable=稳定版 / beta=测试版
+    channel: str = "stable"
+    #: 更新日志（纯文本，一行一条）
+    changelog: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,10 @@ class UpdateInfo:
     note: str = ""
     #: 服务器上有没有这个平台的条目（有但没填版本号 / 地址，也算"有"）
     listed: bool = False
+    #: 服务器上这个平台目前只有测试版（客户端不提示更新，界面上说明一句）
+    beta_only: bool = False
+    #: 稳定版的更新日志（有就展示）
+    changelog: str = ""
 
 
 def platform_key() -> str:
@@ -88,23 +99,38 @@ def is_newer(latest: str, current: str) -> bool:
     return new > old
 
 
-def fetch_release(client: ApiClient, wanted: str | None = None) -> Release | None:
-    """取当前平台的下载项；没有或没配好（`ready=false`）返回 None。"""
+def _to_release(item: dict, key: str) -> Release:
+    return Release(
+        platform=str(item.get("platform", key)),
+        version=str(item.get("version") or ""),
+        url=str(item.get("downloadUrl") or ""),
+        note=str(item.get("note") or ""),
+        ready=bool(item.get("ready")),
+        channel=str(item.get("channel") or "stable").strip().lower(),
+        changelog=str(item.get("changelog") or "").strip(),
+    )
+
+
+def fetch_releases(client: ApiClient, wanted: str | None = None) -> list[Release]:
+    """取当前平台的**所有**发布（新的在前，顺序由服务端给定）。"""
 
     key = wanted or platform_key()
     payload = client.get_json(DOWNLOADS_PATH)
     if not isinstance(payload, list):
-        return None
-    for item in payload:
-        if not isinstance(item, dict) or item.get("platform") != key:
-            continue
-        return Release(
-            platform=str(item.get("platform", key)),
-            version=str(item.get("version") or ""),
-            url=str(item.get("downloadUrl") or ""),
-            note=str(item.get("note") or ""),
-            ready=bool(item.get("ready")),
-        )
+        return []
+    return [
+        _to_release(item, key)
+        for item in payload
+        if isinstance(item, dict) and item.get("platform") == key
+    ]
+
+
+def fetch_release(client: ApiClient, wanted: str | None = None) -> Release | None:
+    """取当前平台**最新稳定版**；没有稳定版（或只有测试版）返回 None。"""
+
+    for release in fetch_releases(client, wanted):
+        if release.channel == "stable":
+            return release
     return None
 
 
@@ -113,15 +139,24 @@ def check(client: ApiClient | None = None, current: str | None = None) -> Update
 
     client = client or ApiClient()
     current = current or __version__
-    release = fetch_release(client)
-    if release is None:
-        # 这个平台在服务器上还没有条目：不是错误，按"没有更新"处理，界面上说明一句
-        logger().info("检查更新：服务器上没有当前平台的下载项")
-        return UpdateInfo(current=current, latest="", has_update=False,
-                          platform=platform_key(), listed=False)
+    releases = fetch_releases(client)
+    stable = next((item for item in releases if item.channel == "stable"), None)
+    if stable is None:
+        # 没有稳定版：可能是这个平台压根没条目，也可能只发了测试版。
+        # 两种都按"没有更新"处理（客户端只检查稳定版），界面上说明一句。
+        logger().info(
+            "检查更新：服务器上没有当前平台的稳定版（共 %d 条，%s）",
+            len(releases),
+            "只有测试版" if releases else "没有条目",
+        )
+        return UpdateInfo(
+            current=current, latest="", has_update=False, platform=platform_key(),
+            listed=bool(releases), beta_only=bool(releases),
+        )
+    release = stable
     newer = release.ready and is_newer(release.version, current)
     logger().info(
-        "检查更新：当前 %s，服务器 %s（ready=%s）→ %s",
+        "检查更新：当前 %s，服务器稳定版 %s（ready=%s）→ %s",
         current, release.version or "（未填）", release.ready,
         "有新版" if newer else "已是最新",
     )
@@ -133,4 +168,5 @@ def check(client: ApiClient | None = None, current: str | None = None) -> Update
         url=release.url if release.ready else "",
         note=release.note,
         listed=True,          # 有条目，只是可能还没填版本号 / 地址
+        changelog=release.changelog,
     )

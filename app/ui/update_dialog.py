@@ -64,9 +64,18 @@ class UpdateDialog(QDialog):
             wrap(label)
             layout.addWidget(label)
 
-        plan = i18n.tr(
-            "更新日志与最低支持版本还没在服务器上；现在只提示版本号与下载地址。"
-        )
+        # 服务器上填了更新日志就直接展示（后台每次发布都能写）；没填才说明一句
+        if info.changelog:
+            notes = QLabel(i18n.tr("更新内容：\n%s") % info.changelog)
+            wrap(notes)
+            layout.addWidget(notes)
+            plan = i18n.tr("只检查稳定版；测试版请到下载页自己取。")
+        elif info.beta_only:
+            plan = i18n.tr("服务器上目前只有测试版；客户端只检查稳定版更新。")
+        else:
+            plan = i18n.tr(
+                "更新日志与最低支持版本还没在服务器上；现在只提示版本号与下载地址。"
+            )
         hint = QLabel(plan)
         design.set_role(hint, "hint")
         wrap(hint)
