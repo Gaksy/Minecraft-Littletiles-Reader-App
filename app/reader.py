@@ -49,17 +49,30 @@ def search_dirs() -> list[Path]:
             dirs.append(Path(bundle))
         exe = Path(sys.executable).resolve()
         dirs.append(exe.parent)
+        # Windows 的包结构是 <包>/LittleTilesReader/LittleTilesReader.exe（应用自己），
+        # 而库的 CLI 在上一层 <包>/LittleTilesReader.exe——所以上一层必须也找。
+        dirs.append(here.parent)
     return dirs
 
 
 def bundled_reader() -> Path | None:
-    """应用旁边的 CLI（没有就返回 None）。"""
+    """应用旁边的 CLI（没有就返回 None）。
 
+    必须排掉"自己"：Windows 上应用的可执行文件也叫 `LittleTilesReader.exe`，
+    而且就在 `app_folder()` 里，不排掉就会把**应用自己**当成库的 CLI 返回——
+    后果是每跑一次导出都新开一个客户端窗口。
+    """
+
+    me = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None
     for folder in search_dirs():
         for name in NAMES:
             candidate = folder / name
-            if candidate.is_file():
-                return candidate
+            if not candidate.is_file():
+                continue
+            if me is not None and candidate.resolve() == me:
+                logger().debug("跳过应用自己：%s", candidate)
+                continue
+            return candidate
     return None
 
 

@@ -90,6 +90,44 @@ def main() -> int:
         check("配置优先", _cli_path(config).resolve() == custom.resolve(),
               str(_cli_path(config)))
 
+    # Windows 的包结构：<包>/LittleTilesReader/LittleTilesReader.exe 是**应用自己**，
+    # 库的 CLI 在上一层 <包>/LittleTilesReader.exe。这里必须挑后者，
+    # 否则每次导出都会新开一个客户端窗口。
+    with tempfile.TemporaryDirectory(prefix="lt-win-") as tmp:
+        bundle = Path(tmp).resolve()
+        cli = bundle / "LittleTilesReader.exe"          # 库的 CLI（上一层）
+        cli.write_text("", encoding="utf-8")
+        app_dir = bundle / "LittleTilesReader"
+        app_dir.mkdir()
+        app_exe = app_dir / "LittleTilesReader.exe"     # 应用自己
+        app_exe.write_text("", encoding="utf-8")
+        unpacked = app_dir / "_internal"
+        unpacked.mkdir()
+
+        saved = (sys.platform, getattr(sys, "frozen", None), sys.executable,
+                 getattr(sys, "_MEIPASS", None))
+        sys.platform = "win32"
+        sys.frozen = True          # type: ignore[attr-defined]
+        sys.executable = str(app_exe)
+        sys._MEIPASS = str(unpacked)  # type: ignore[attr-defined]
+        try:
+            found = reader.bundled_reader()
+            check("Windows：不会把应用自己当 CLI",
+                  found is not None and found.resolve() == cli, str(found))
+            check("Windows：项目界面同样拿到 CLI",
+                  _cli_path(AppConfig()).resolve() == cli, str(_cli_path(AppConfig())))
+        finally:
+            sys.platform = saved[0]
+            if saved[1] is None:
+                del sys.frozen      # type: ignore[attr-defined]
+            else:
+                sys.frozen = saved[1]  # type: ignore[attr-defined]
+            sys.executable = saved[2]
+            if saved[3] is None:
+                del sys._MEIPASS    # type: ignore[attr-defined]
+            else:
+                sys._MEIPASS = saved[3]  # type: ignore[attr-defined]
+
     print()
     if FAILURES:
         print("失败 %d 项: %s" % (len(FAILURES), ", ".join(FAILURES)))

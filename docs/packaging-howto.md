@@ -110,12 +110,17 @@ cmake --build build-release --config Release
 
 # 产物（注意 .exe，以及它旁边会被自动拷过去的 nbt++.dll）
 dir build-release\Release\LittleTilesReader.exe
+dir build-release\Release\nbt++.dll
 ```
+
+> `nbt++.dll` 是库的 CMake 在 POST_BUILD 里自动拷过去的（`CMakeLists.txt` 里的
+> `if(WIN32)` 那段），不用手工放。打包脚本会把 exe 同目录的 `*.dll` 一起收走。
 
 **自检**：直接跑一下 CLI，确认它能自己起来（打包前必须过这一关，别把坏的塞进包）：
 
 ```sh
 ./cmake-build-release-ninja/LittleTilesReader --version
+.\build-release\Release\LittleTilesReader.exe --version     # Windows
 # 期望打印两行：LittleTiles Reader x.y.z（...） 与 x.y.z
 ```
 
@@ -224,6 +229,23 @@ dist/app/LittleTilesReader-<版本>-<平台>.zip   ← 上传这个
 
 > macOS 的包**只有 `.app`**，没有裸 onedir（原因见上一节）。`LittleTilesReader`
 > 与 `.app` 同级不是随手放的：`app/reader.py` 就是去 `.app` 所在文件夹找它。
+
+Windows 的同一层结构（名字不一样，位置一样）：
+
+```
+dist/app/LittleTilesReader-<版本>-windows-x64/
+├── LittleTilesReader\                 # PyInstaller onedir：应用自己
+│   ├── LittleTilesReader.exe
+│   └── _internal\                     # 只读资源（tools/、字体、图标）
+├── LittleTilesReader.exe              # ← 库的 CLI，在**上一层**
+├── nbt++.dll                          # ← CLI 的依赖，与 CLI 同目录
+└── LICENSE / THIRD-PARTY.md / README-unsigned.md / OFL.txt / licenses\
+```
+
+> **Windows 上这两个 `LittleTilesReader.exe` 不是同一个东西**，别混：
+> 应用自己那个在 `LittleTilesReader\` 里，库的 CLI 在上一层。`app/reader.py`
+> 会显式跳过"正在运行的自己"，再去上一层找（`tests/test_reader_locate.py`
+> 钉住了这条）。定位错的症状是：**每点一次导出就多开一个客户端窗口**。
 
 常用开关：
 
@@ -351,6 +373,7 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 | 双击没反应（macOS） | 未签名被拦，照 `README-unsigned.md`；或直接跑 `.app/Contents/MacOS/LittleTilesReader` 看终端输出（**最快的排查手段**） |
 | 导出产物找不到 | 数据目录就在应用文件夹（首次运行后出现 `outputs/`）；也看「关于」与日志里写的路径 |
 | 想知道包多大 | 真机实测（macOS ARM，形态 B）：目录 **113 MB**、zip **39.6 MB**；明显更大先看有没有把裸 onedir 也发了（应该只有 `.app`），再查 `EXCLUDES` |
+| 每点一次导出就多开一个客户端窗口（Windows） | 把"应用自己"当成库的 CLI 了。Windows 上两个 `LittleTilesReader.exe` 同名，一个在 `LittleTilesReader\` 里（应用），一个在上一层（CLI）。见 §8 第 5 条 |
 
 ---
 
@@ -367,3 +390,38 @@ cd ../minecraft-littletiles-reader-app && python tools/build_app.py --with-reade
 cd ..\minecraft-littletiles-reader; cmake -S . -B build-release -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"; cmake --build build-release --config Release
 cd ..\minecraft-littletiles-reader-app; python tools\build_app.py --with-reader --reader ..\minecraft-littletiles-reader\build-release\Release\LittleTilesReader.exe
 ```
+
+---
+
+## 8. 换平台构建前：照单核对（真机已踩过的坑）
+
+2026-09-14 在 macOS ARM 真机上第一次真跑，**同一个包连爆四次**，共同点是
+"构建成功 ≠ 能用"。换平台（尤其 Windows）之前，按这张表逐条核对：
+
+| # | 症状（用户视角） | 真因 | 现在怎么挡住 |
+|---|---|---|---|
+| 1 | 双击没反应 | 入口 `app/__main__.py` 通篇相对导入，被 PyInstaller 当脚本跑，`__package__` 为空 | 入口改成 `packaging/entry.py`（绝对导入）；**别改回去** |
+| 2 | 双击没反应 / 依赖报错 | CLI 的 `libnbt++.dylib` 引用是 `@rpath/...`，而 LC_RPATH 是**本机绝对路径** | 打包时 `install_name_tool` 改写成 `@executable_path/...` |
+| 3 | 点「重新组合素材」报 `No module named ltgen.console` | `tools/*.py` 是运行时按路径加载的，PyInstaller 静态分析看不到它们的 import | `--collect-submodules ltgen` + `tool_hidden_imports()`；**加新工具脚本同步 `app/generators.py::TOOL_NAMES`** |
+| 4 | 项目导出报"找不到 LittleTilesReader"，路径里出现 `.app/Contents/minecraft-littletiles-reader/…` | 有代码绕过 `app/reader.py` 直接用了 `ltgen.paths.*`（它靠 `__file__` 反推仓库根，冻结后算进 `.app` 里） | 定位 CLI **一律**走 `reader.locate()` |
+
+Windows 上还要额外留意第 5 条（macOS 上不成立、容易漏掉）：
+
+| # | 症状 | 真因 | 现在怎么挡住 |
+|---|---|---|---|
+| 5 | 每点一次导出就**多开一个客户端窗口** | Windows 包结构里 `<包>\LittleTilesReader\LittleTilesReader.exe` 是**应用自己**，而库的 CLI 在上一层，名字一样；不排掉就会把自己当 CLI 去执行 | `bundled_reader()` 显式跳过 `sys.executable`、并往上一层找；`tests/test_reader_locate.py` 覆盖 |
+
+### 每个平台都跑这三条（别跳）
+
+```sh
+# ① 冻包自检（不开界面，一秒出结果）
+.../LittleTilesReader.app/Contents/MacOS/LittleTilesReader --self-check      # macOS
+...\LittleTilesReader\LittleTilesReader.exe --self-check                     # Windows
+
+# ② 全套脚本自检（当前 25 个）
+python tests/test_<名字>.py     # 或按 §2 的清单逐个跑
+
+# ③ 真机点一遍：首次许可 → 快速导出 → 项目模式导出 → 导入素材/重新组合素材
+```
+
+第 ①②条能挡住第 1（部分）、3、4、5 类；**第 2 类只有 ③ 能挡**（依赖是在启动时才解析的）。
