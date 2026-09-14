@@ -18,6 +18,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# 数据目录指到临时目录：自检绝不能碰用户真实的 config/ 与 logs/
+# （`data_dir()` 每次调用重新解析 LTR_HOME，所以在这里设就够了）
+_LTR_HOME = tempfile.mkdtemp(prefix="lt-home-")
+os.environ["LTR_HOME"] = _LTR_HOME
 
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -45,6 +49,7 @@ from app.records import ExportRecord, RecordStore  # noqa: E402
 from app.ui.delete_project import DeleteProjectDialog  # noqa: E402
 from app.ui.project_wizard import NewProjectWizard  # noqa: E402
 from app.ui.reset_dialog import ResetDataDialog  # noqa: E402
+from app.ui.my_feedback_dialog import MyFeedbackDialog  # noqa: E402
 from app.ui.report_dialog import ReportDialog  # noqa: E402
 from app.ui.update_dialog import UpdateDialog  # noqa: E402
 from app.update import UpdateInfo  # noqa: E402
@@ -177,6 +182,7 @@ def main() -> int:
             "新建向导": lambda: NewProjectWizard(config, root / "np"),
             "删除项目": lambda: DeleteProjectDialog(str(project.path), project),
             "反馈问题": lambda: ReportDialog(config, root, None, client=_offline_client()),
+            "我的反馈": lambda: MyFeedbackDialog(root, None, client=_offline_client()),
             "检查更新": lambda: UpdateDialog(
                 UpdateInfo(current="0.1.0", latest="v0.9.0", has_update=True,
                            platform="macos-arm", url="https://example.invalid/a.zip",

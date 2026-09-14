@@ -251,6 +251,8 @@ class ReportDialog(QDialog):
             type=self.type_box.currentData(),
             severity=self.severity_box.currentData(),
             contact=self.contact_edit.text().strip(),
+            # 惯用语言 = 应用当前界面语言：后台回复按它给译文（另附中文原文对照）
+            locale=i18n.current(),
         )
         if self.attach.isChecked():
             report.diagnostics = self._diagnostics
@@ -309,6 +311,12 @@ class ReportDialog(QDialog):
                 "severity": report.severity,
                 "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "logCopy": str(self._log_path),
+                # 提交时的惯用语言与初始状态：后台回复后按它选译文
+                "locale": report.locale,
+                "status": None,
+                "statusName": None,
+                "lastCheckedAt": None,
+                "seenAt": None,
             }
         )
         self.btn_copy.setEnabled(bool(code))

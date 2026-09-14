@@ -67,6 +67,8 @@ class Report:
     contact: str = ""
     diagnostics: str = ""
     log_tail: str = ""
+    #: 提交者惯用语言（后台据此给译文；填的是应用当前界面语言）
+    locale: str = "zh-Hans"
     payload: dict = field(default_factory=dict)
 
 
@@ -381,6 +383,9 @@ def build_payload(report: Report, *, page_url: str = "desktop-app") -> dict:
         "contact": report.contact.strip(),
         # 桌面端没有 URL，填一个能看出来的标记，后台一眼知道来源
         "pageUrl": page_url,
+        # 后台按 source 分栏（网站 / 桌面客户端）；locale 决定回复用哪种语言
+        "source": "app",
+        "locale": report.locale or "zh-Hans",
         "userAgent": "LittleTilesReader/%s (%s)" % (__version__, platform.system()),
     }
 
@@ -452,7 +457,12 @@ def save_log_copy(report: Report, app_dir: Path | str, bug_no: str) -> Path:
 
 @dataclass
 class ReportStore:
-    """`config/reports.json`：记下发出去的编号与数据码，能回头查进度。"""
+    """`config/reports.json`：记下发出去的编号与数据码，能回头查进度。
+
+    每条除了提交信息，还保存**服务端的最新状态与回复**，以及本机的"看过没有"：
+    启动时只自动查**没看过**的条目；用户查看过就写 `seenAt`，之后不再自动查
+    （省请求，也不烦人）——想再看就手动点「查看详情」，那永远是真查。
+    """
 
     path: Path
     items: list[dict] = field(default_factory=list)
@@ -483,3 +493,82 @@ class ReportStore:
 
     def latest(self) -> dict | None:
         return self.items[0] if self.items else None
+
+    # ---- 状态追踪 ----
+
+    def by_code(self, data_code: str) -> dict | None:
+        for entry in self.items:
+            if entry.get("dataCode") == data_code:
+                return entry
+        return None
+
+    def unresolved(self) -> list[dict]:
+        """还没看过的条目（启动时自动查这些）。"""
+        return [e for e in self.items if e.get("dataCode") and not e.get("seenAt")]
+
+    def solved_unread(self) -> list[dict]:
+        """已经有结论、但用户还没看过的（要弹一次提示）。"""
+        return [
+            entry
+            for entry in self.unresolved()
+            if entry.get("status") in ("resolved", "rejected")
+        ]
+
+    def mark_checked(self, entry: dict, payload: dict) -> dict:
+        """把服务端查回来的状态/回复写进本地记录。"""
+        if not isinstance(payload, dict):
+            return entry
+        for key in (
+            "status", "statusName", "opinion", "resolution",
+            "opinionI18n", "resolutionI18n", "locale", "localeName",
+        ):
+            if payload.get(key) is not None:
+                entry[key] = payload[key]
+        entry["lastCheckedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.save()
+        return entry
+
+    def mark_seen(self, entry: dict) -> None:
+        """标记为已读：之后不再自动查这条。"""
+        entry["seenAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.save()
+
+    def remove(self, data_code: str) -> None:
+        self.items = [e for e in self.items if e.get("dataCode") != data_code]
+        self.save()
+
+
+def refresh(store: ReportStore, client: ApiClient | None = None) -> list[dict]:
+    """启动/手动：把"没看过"的条目查一遍，返回**新变成有结论**的那些。
+
+    单条查失败（网络、服务器问题）只跳过它——不能让一条查不到就中断其余的。
+    """
+    client = client or ApiClient()
+    solved: list[dict] = []
+    for entry in store.unresolved():
+        code = entry.get("dataCode")
+        if not code:
+            continue
+        before = entry.get("status")
+        try:
+            payload = query(code, client)
+        except ApiError as error:
+            logger().info("查反馈状态失败（%s）：%s", code, error)
+            continue
+        store.mark_checked(entry, payload)
+        if entry.get("status") in ("resolved", "rejected") and before != entry.get("status"):
+            solved.append(entry)
+    return solved
+
+
+def reply_for(entry: dict, field_name: str) -> tuple[str, str | None]:
+    """取一条回复：优先**用户语言的译文**，同时给出中文原文（供对照）。
+
+    返回 `(要显示的文字, 中文原文或 None)`；没有译文时第二项是 None，
+    调用方据此标注"本条回复只有中文"——不假装有翻译。
+    """
+    translated = (entry.get(field_name + "I18n") or "").strip()
+    original = (entry.get(field_name) or "").strip()
+    if translated:
+        return translated, (original or None)
+    return original, None

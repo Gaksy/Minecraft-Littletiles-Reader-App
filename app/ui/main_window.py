@@ -35,7 +35,7 @@ from ltgen.lint import lint_package
 
 from .. import appdata, i18n
 from ..applog import logger
-from ..config import APP_DIR, AppConfig
+from ..config import APP_DIR, AppConfig, data_dir
 from ..job import build_snbt_job, default_options
 from ..project import Project
 from ..sources import ARCHIVE_SUFFIXES, resolve_source
@@ -162,9 +162,10 @@ class MainWindow(QMainWindow):
         # "写文件阶段切不确定进度"这类修正只需要改一处。
         # open_directory / QMessageBox 按**本模块的名字**注入，测试替换本模块的
         # 同名对象就能拦住真实弹窗。
+        self.app_dir = data_dir()      # 可写数据根（默认就是应用目录；LTR_HOME 可覆盖）
         self.panel = ExportPanel(
             config,
-            APP_DIR,
+            self.app_dir,
             self,
             open_directory=open_directory,
             message_box=QMessageBox,
@@ -187,6 +188,7 @@ class MainWindow(QMainWindow):
         # 启动后查一次更新：每天最多一次，失败静默（离线也要能正常用）。
         # 放到事件循环里跑，别让网络请求卡住窗口显示。
         QTimer.singleShot(0, self._maybe_check_update_on_start)
+        QTimer.singleShot(0, self._maybe_check_feedback_on_start)
 
     # ---- 兼容层 ----------------------------------------------------------
 
@@ -285,7 +287,7 @@ class MainWindow(QMainWindow):
         非项目模式下不该每次都逼用户过一遍列表——选择记在库里，这次直接用；
         要改就点主界面的「材质管理」。组合按顺序指纹缓存，没变就是毫秒级命中。
         """
-        library = Library.load(APP_DIR)
+        library = Library.load(self.app_dir)
         kept = library.selected()
         # 每次导出都问一句，三选一：继续用上次 / 去材质管理 / 不用材质（白模）。
         # 有"上次"才出现第一个按钮；一次都没配过时只剩后两条路。
@@ -298,7 +300,7 @@ class MainWindow(QMainWindow):
             self._log("本次不使用材质：导出白模（几何完整，但没有贴图/MTL）。")
             return ""
         if dialog.choice == "manage":
-            manager = MaterialManagerDialog(APP_DIR, self)
+            manager = MaterialManagerDialog(self.app_dir, self)
             if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
                 return None
             library = manager.library
@@ -314,7 +316,7 @@ class MainWindow(QMainWindow):
         # 组合在后台线程里跑：首次或素材变动要 4~5 秒，放主线程界面会冻住
         # （进度框也不转，看着像卡死）。用嵌套事件循环等它，界面照常重绘。
         progress = busy_dialog("材质组合", "正在按启用顺序组合素材…", self)
-        composer = _Composer(APP_DIR, library, self)
+        composer = _Composer(self.app_dir, library, self)
         result: dict = {}
         loop = QEventLoop()
 
@@ -391,6 +393,7 @@ class MainWindow(QMainWindow):
         help_menu = bar.addMenu("帮助(&H)")
         help_menu.addAction("检查更新", self._check_update)
         help_menu.addAction("反馈问题", self._report_problem)
+        help_menu.addAction("我的反馈", self._my_feedback)
         help_menu.addSeparator()
         help_menu.addAction("关于", self._show_about)
         i18n.translate(self)
@@ -506,12 +509,64 @@ class MainWindow(QMainWindow):
             return
         self._check_update(silent=True)
 
+    def _my_feedback(self, *_args) -> None:
+        from .my_feedback_dialog import MyFeedbackDialog
+
+        MyFeedbackDialog(self.app_dir, self, client=self._api_client()).exec()
+
+    def _maybe_check_feedback_on_start(self) -> None:
+        """启动时查一遍"没看过"的反馈；有新结论就提示一次，看过之后写已读。
+
+        * 一天最多自动查一次（`last_feedback_check`）；
+        * 失败静默——离线也要能正常用；
+        * 只有用户点「查看」才会去查详情（那时才写 seenAt）。
+        """
+        from .my_feedback_dialog import check_on_start
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.config.last_feedback_check == today:
+            return
+        try:
+            solved = check_on_start(self.app_dir, self._api_client())
+        except Exception as error:      # noqa: BLE001 - 自检说的是"绝不打扰启动"
+            logger().info("启动查反馈状态失败：%s", error)
+            return
+        self.config.last_feedback_check = today
+        self._save_config("反馈检查时间")
+        if not solved:
+            return
+        first = solved[0]
+        if not popup.interactive():
+            # 离屏（自检）环境：只记日志，别弹一个永远等不到点击的模态框
+            logger().info(
+                "反馈有新结论（离屏环境不弹提示）：%s %s",
+                first.get("bugNo"), first.get("statusName"),
+            )
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle(i18n.tr("反馈有新进展"))
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            i18n.tr("你反馈的 %s 有结论了：%s")
+            % (first.get("bugNo") or "", first.get("statusName") or "")
+        )
+        if len(solved) > 1:
+            box.setInformativeText(i18n.tr("另有 %d 条也有新进展。") % (len(solved) - 1))
+        view = box.addButton(i18n.tr("查看"), QMessageBox.ButtonRole.AcceptRole)
+        later = box.addButton(i18n.tr("以后再说"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(view)
+        box.exec()
+        if box.clickedButton() is view:
+            from .my_feedback_dialog import MyFeedbackDialog
+
+            MyFeedbackDialog(self.app_dir, self, client=self._api_client()).exec()
+
     def _report_problem(self) -> None:
         from .report_dialog import ReportDialog
 
         dialog = ReportDialog(
             self.config,
-            APP_DIR,
+            self.app_dir,
             self,
             client=self._api_client(),
             extra={
@@ -537,14 +592,14 @@ class MainWindow(QMainWindow):
 
         from .reset_dialog import ResetDataDialog
 
-        dialog = ResetDataDialog(APP_DIR, self)
+        dialog = ResetDataDialog(self.app_dir, self)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         keys = dialog.keys()
         if not keys:
             return
         try:
-            freed = appdata.clear(APP_DIR, keys)
+            freed = appdata.clear(self.app_dir, keys)
         except OSError as error:
             logger().exception("清空数据失败：%s", keys)
             popup.warning(self, "清空失败", str(error))
@@ -585,7 +640,7 @@ class MainWindow(QMainWindow):
         self.config.register_project(project.path)
         self.config.last_project = str(project.path)
         self.config.save()
-        window = ProjectWindow(project, self.config, APP_DIR, self)
+        window = ProjectWindow(project, self.config, self.app_dir, self)
         window.closed.connect(lambda: self._forget_project_window(window))
         self._project_windows.append(window)
         window.show()
@@ -630,7 +685,7 @@ class MainWindow(QMainWindow):
                 self, "导出进行中", "导出任务还没结束，现在不能更改素材。"
             )
             return
-        manager = MaterialManagerDialog(APP_DIR, self)
+        manager = MaterialManagerDialog(self.app_dir, self)
         if manager.exec() != MaterialManagerDialog.DialogCode.Accepted:
             return
         chosen = manager.library.selected()
@@ -667,9 +722,9 @@ class MainWindow(QMainWindow):
 
         慢活全在后台线程里，主线程只负责转圈——不然四十秒的冻结会让用户以为卡死。
         """
-        work = APP_DIR / "cache" / "sources"
+        work = self.app_dir / "cache" / "sources"
         self._log("导入素材文件: %s" % chosen)
-        out = APP_DIR / "resources" / "packages" / ("vanilla_" + chosen.stem)
+        out = self.app_dir / "resources" / "packages" / ("vanilla_" + chosen.stem)
         builder = _PackageBuilder(chosen, work, out, self)
         result: dict = {}
         loop = QEventLoop()
@@ -809,7 +864,7 @@ class MainWindow(QMainWindow):
             return
         kind, payload = picked
         if kind == "paste":
-            chosen = str(save_pasted_snbt(payload, APP_DIR / "tmp"))
+            chosen = str(save_pasted_snbt(payload, self.app_dir / "tmp"))
             self.panel.log_line("粘贴的 SNBT 已存为：%s" % chosen)
             stem = "paste_%s" % datetime.now().strftime("%Y%m%d_%H%M%S")
         else:

@@ -12,9 +12,21 @@
 
 from __future__ import annotations
 
+import os
+
 from PySide6.QtWidgets import QMessageBox
 
 from .. import i18n
+
+
+def interactive() -> bool:
+    """当前环境能不能弹模态框。
+
+    离屏（`QT_QPA_PLATFORM=offscreen`，也就是自检）下 `exec()` 会一直等一个永远不会
+    出现的点击——所以那种环境里只写日志，不弹窗。真实桌面环境返回 True。
+    """
+
+    return os.environ.get("QT_QPA_PLATFORM", "") != "offscreen"
 
 
 def info(parent, title: str, text: str, **kwargs) -> None:

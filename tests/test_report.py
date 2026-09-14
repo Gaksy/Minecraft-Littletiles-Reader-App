@@ -22,6 +22,8 @@ from app import update as update_mod  # noqa: E402
 from app.api import ApiClient, ApiError  # noqa: E402
 from app.report import (  # noqa: E402
     DESC_MAX,
+    reply_for,
+    refresh,
     collect_logs_tar,
     recent_logs,
     upload_bundle,
@@ -147,9 +149,12 @@ def test_payload() -> None:
     payload = build_payload(report)
     check("字段名与服务器一致",
           set(payload) == {"type", "title", "description", "module", "severity",
-                           "contact", "pageUrl", "userAgent"}, str(sorted(payload)))
+                           "contact", "pageUrl", "source", "locale", "userAgent"},
+          str(sorted(payload)))
     check("标题去掉空白", payload["title"] == "导出卡住", payload["title"])
     check("默认报 other（服务器只认那五个值）", payload["module"] == "other")
+    check("带上来源（后台据此分栏）", payload.get("source") == "app", str(payload.get("source")))
+    check("带惯用语言", payload.get("locale") == "zh-Hans", str(payload.get("locale")))
     check("诊断与日志都拼进去了",
           "诊断" in payload["description"] and "line2" in payload["description"])
 
@@ -265,6 +270,49 @@ def test_upload(tmp: Path) -> None:
     check("没凭证就直说", raised == "client", raised)
 
 
+def test_tracking(tmp: Path) -> None:
+    print("反馈状态追踪：")
+    store = ReportStore.load(tmp)
+    store.add({"bugNo": "20260914-003", "dataCode": "WXYZ2345", "title": "t",
+               "locale": "zh-Hant", "seenAt": None})
+    store.add({"bugNo": "20260914-004", "dataCode": "ABCD2345", "title": "u",
+               "seenAt": "2026-09-14 22:00:00"})      # 已读：不该再自动查
+    check("只自动查没看过的", [e["bugNo"] for e in store.unresolved()] == ["20260914-003"],
+          str(store.unresolved()))
+
+    def client_for(payload):
+        def opener(_request):
+            return json.dumps({"success": True, "payload": payload},
+                              ensure_ascii=False).encode("utf-8")
+
+        return ApiClient(opener=opener)
+
+    solved = refresh(store, client_for({"status": "resolved", "statusName": "已解决",
+                                        "opinion": "已修复", "resolution": "0.2.0 修复",
+                                        "opinionI18n": "已修復", "resolutionI18n": "0.2.0 修復",
+                                        "localeName": "繁體中文"}))
+    check("查到新结论会报出来", [e["bugNo"] for e in solved] == ["20260914-003"],
+          str([e["bugNo"] for e in solved]))
+    entry = store.by_code("WXYZ2345")
+    check("状态与回复写进本地", entry is not None and entry["status"] == "resolved"
+          and entry["resolutionI18n"] == "0.2.0 修復", str(entry and entry.get("status")))
+    check("记了查询时间", bool(entry and entry.get("lastCheckedAt")))
+
+    store.mark_seen(entry)
+    check("标记已读后不再自动查", not store.unresolved())
+    check("再查一次不会重复报", refresh(store, client_for({"status": "resolved"})) == [])
+
+    text, origin = reply_for(entry, "resolution")
+    check("回复优先给译文", text == "0.2.0 修復" and origin == "0.2.0 修复",
+          "%s / %s" % (text, origin))
+    plain = {"resolution": "只有中文"}
+    text2, origin2 = reply_for(plain, "resolution")
+    check("没译文就如实给中文", text2 == "只有中文" and origin2 is None, str((text2, origin2)))
+
+    store.remove("WXYZ2345")
+    check("能删本机记录", store.by_code("WXYZ2345") is None)
+
+
 def test_store(tmp: Path) -> None:
     print("留痕：")
     store = ReportStore.load(tmp)
@@ -291,6 +339,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="lt-report-") as tmp:
         root = Path(tmp)
         test_logs(root / "logs-case")
+        test_tracking(root / "tracking")
         test_upload(root)
         test_store(root)
     print()

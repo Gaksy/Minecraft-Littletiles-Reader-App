@@ -13,6 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# 数据目录指到临时目录：自检绝不能碰用户真实的 config/ 与 logs/
+# （`data_dir()` 每次调用重新解析 LTR_HOME，所以在这里设就够了）
+_LTR_HOME = tempfile.mkdtemp(prefix="lt-home-")
+os.environ["LTR_HOME"] = _LTR_HOME
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 

@@ -7,13 +7,39 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 # 仓库根 = 应用目录。打包后它就是安装目录（便携式），所以配置与受管资源都放在旁边。
+# 代码目录（只读资源：字体、图标、模板都在这里）
 APP_DIR = Path(__file__).resolve().parents[1]
+
+
+def data_dir() -> Path:
+    """**可写数据**的根：配置、日志、产物、素材库、缓存都放这儿。
+
+    默认就是应用目录（便携模式，行为和以前完全一样）。
+    打包/自检时用环境变量 `LTR_HOME` 指到别处：
+
+    * 安装到 `Program Files` / `/Applications` 时，那里不可写，必须换到用户目录；
+    * 自检跑在真实机器上时，不能去动用户真实的 `config/`、`logs/`。
+
+    见 `docs/packaging.md` §2.1。
+    """
+
+    override = os.environ.get("LTR_HOME")
+    return Path(override).expanduser() if override else APP_DIR
+
+
+def config_path() -> Path:
+    """配置文件的默认位置（每次调用都重新解析，方便测试改 `LTR_HOME`）。"""
+
+    return data_dir() / "config" / "app.json"
+
+
 CONFIG_DIR = APP_DIR / "config"
-CONFIG_PATH = CONFIG_DIR / "app.json"
+CONFIG_PATH = CONFIG_DIR / "app.json"      # 兼容旧引用；新代码请用 config_path()
 
 MAX_RECENT = 10
 
@@ -39,10 +65,11 @@ class AppConfig:
     report_contact: str = ""         # 上次填过的联系方式，下次反馈自动带出来
     check_update_on_start: bool = True   # 启动时静默查一次（每天最多一次）
     last_update_check: str = ""      # 上次检查日期（YYYY-MM-DD），用来做"每天一次"
+    last_feedback_check: str = ""    # 上次查反馈状态的日期（同样每天一次）
 
     @staticmethod
     def load(path: Path | None = None) -> "AppConfig":
-        target = path or CONFIG_PATH
+        target = path or config_path()
         if not target.is_file():
             return AppConfig()
         try:
@@ -56,7 +83,7 @@ class AppConfig:
         return AppConfig(**{k: v for k, v in data.items() if k in known})
 
     def save(self, path: Path | None = None) -> Path:
-        target = path or CONFIG_PATH
+        target = path or config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
             json.dumps(asdict(self), ensure_ascii=False, indent=2) + "\n",
@@ -71,7 +98,7 @@ class AppConfig:
         self.recent_snbt = _bump(self.recent_snbt, path)
 
     def resolved_output_dir(self) -> Path:
-        return Path(self.output_dir) if self.output_dir else APP_DIR / "outputs"
+        return Path(self.output_dir) if self.output_dir else data_dir() / "outputs"
 
     # ---- 项目登记表 ------------------------------------------------------
     #

@@ -162,6 +162,46 @@ def main() -> int:
         check("服务器没发布时说明清楚", "windows" in joined, joined[:80])
         plain.close()
 
+    # ---- 我的反馈：列表 / 译文优先 / 展开中文原文 / 已读 ----
+    print("我的反馈：")
+    with tempfile.TemporaryDirectory(prefix="lt-my-fb-") as tmp:
+        home = Path(tmp)
+        (home / "config").mkdir(parents=True)
+        (home / "config" / "reports.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "bugNo": "20260914-003", "dataCode": "WXYZ2345",
+                        "title": "多选框没多语言", "type": "bug", "severity": "LOW",
+                        "createdAt": "2026-09-14 20:20:26", "locale": "zh-Hant",
+                        "localeName": "繁體中文", "status": "resolved",
+                        "statusName": "已解决", "opinion": "已修复",
+                        "resolution": "已在 0.2.0 修复，请更新。",
+                        "opinionI18n": "已修復", "resolutionI18n": "已在 0.2.0 修復，請更新。",
+                        "lastCheckedAt": "2026-09-15 09:00:00", "seenAt": None,
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        from app.ui.my_feedback_dialog import MyFeedbackDialog
+
+        mine = MyFeedbackDialog(home, None, client=client_returning({}))
+        mine.show()
+        application.processEvents()
+        check("列表里有这条反馈", mine.table.rowCount() == 1, str(mine.table.rowCount()))
+        check("状态显示出来了", "已解决" in mine.table.item(0, 3).text(),
+              mine.table.item(0, 3).text())
+        text = mine.detail.toPlainText()
+        check("默认显示译文", "已在 0.2.0 修復" in text, text.replace("\n", " | ")[:80])
+        check("给了中文原文入口", mine.origin_toggle.isVisible())
+        mine.origin_toggle.setChecked(True)
+        application.processEvents()
+        check("展开后换成中文原文", "已在 0.2.0 修复" in mine.detail.toPlainText())
+        check("未读点还在（还没点查看详情）", mine.table.item(0, 0).text() == "●")
+        mine.close()
+
     print()
     if FAILURES:
         print("失败 %d 项: %s" % (len(FAILURES), ", ".join(FAILURES)))
