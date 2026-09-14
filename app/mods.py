@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,19 +77,15 @@ def merge_mods(
         shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    command = [sys.executable, str(APP_DIR / "tools" / "add_mod_textures.py")]
-    for root, namespace in roots:
-        command += ["--mod-root", str(root), "--namespace", namespace]
-    command += ["--base", str(base_package), "--out", str(out_dir)]
+    # 进程内调用（理由同 vanilla.py：打包后没法再用 sys.executable 跑脚本）
+    from .generators import build_pack_snbt
 
-    # 这些脚本输出中文，必须显式按 utf-8 解码——默认按系统 locale(cp1252)
-    # 会在读取线程里直接抛 UnicodeDecodeError。
-    done = subprocess.run(
-        command, capture_output=True, text=True, encoding="utf-8", errors="replace"
+    build_pack_snbt(
+        [root for root, _ in roots],
+        [namespace for _, namespace in roots],
+        base_package,
+        out_dir,
     )
-    output = (done.stdout or "") + (done.stderr or "")
-    if done.returncode != 0:
-        raise RuntimeError("叠加模组失败：\n%s" % output.strip())
 
     # add_mod_textures 会自己复制原版的 block_ids.tsv（从 --base 拿），
     # 万一底包里没有，就补上随应用带的那份，否则普通方块会变白模。

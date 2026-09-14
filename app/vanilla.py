@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,22 +100,12 @@ def build_package_from_resolved(
         shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    script = APP_DIR / "tools" / "build_assets_from_pack.py"
-    command = [
-        sys.executable,
-        str(script),
-        "--vanilla", str(minecraft_root),
-        "--pack", str(pack_root),
-        "--out", str(out_dir),
-    ]
-    # 必须显式指定 utf-8：这些脚本输出的是中文，而 subprocess 的 text=True 默认
-    # 按系统 locale 解码（Windows 上可能是 cp1252），会直接把读取线程搞崩。
-    done = subprocess.run(
-        command, capture_output=True, text=True, encoding="utf-8", errors="replace"
-    )
-    output = (done.stdout or "") + (done.stderr or "")
-    if done.returncode != 0:
-        raise RuntimeError("生成素材包失败：\n%s" % output.strip())
+    # 进程内调用（不 fork Python）：打包后 sys.executable 是应用自己，
+    # 再拿它跑 .py 只会把 GUI 又开一遍 —— 见 docs/packaging.md §2.2
+    from .generators import build_pack_assets
+
+    output = "生成端：build_assets_from_pack（进程内调用）"
+    build_pack_assets(pack_root, minecraft_root, out_dir)
 
     # 生成端拿到的是"光秃秃的原版素材"，里面没有 block_ids.tsv（那是我们自己的文件），
     # 所以在这里补上随应用带的那份；没有它，普通的实心方块只能出白模。

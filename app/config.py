@@ -8,12 +8,25 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 # 仓库根 = 应用目录。打包后它就是安装目录（便携式），所以配置与受管资源都放在旁边。
 # 代码目录（只读资源：字体、图标、模板都在这里）
 APP_DIR = Path(__file__).resolve().parents[1]
+
+
+def bundle_root() -> Path:
+    """**只读资源**的根：`tools/` 这类随包分发、运行时不改的东西。
+
+    开发时就是仓库根；PyInstaller 打包后是它的解包目录（`sys._MEIPASS`，
+    onedir 下即 `_internal/`）——`--add-data` 放进去的东西都在那儿。
+    注意别和 `data_dir()` 混：那个是**可写**的配置/日志/产物。
+    """
+
+    bundled = getattr(sys, "_MEIPASS", "")
+    return Path(bundled) if bundled else APP_DIR
 
 
 def data_dir() -> Path:

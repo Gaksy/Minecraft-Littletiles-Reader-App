@@ -148,6 +148,53 @@ def copy_textures(rows, out_dir, root_by_namespace, stats):
                 stats.setdefault('缺失', []).append('%s -> %s' % (key, rel))
 
 
+def build_pack_snbt(mod_roots, namespaces, base, out):
+    """把原版 + 若干模组拼成 pack_snbt；返回产物目录。
+
+    独立成函数是为了**进程内调用**：桌面应用打包后 `sys.executable` 是应用自己，
+    没法再拿它去跑这个 .py（见 docs/packaging.md §2.2）。命令行入口 main() 仍在，
+    行为一字不变。
+    """
+    if len(mod_roots) != len(namespaces):
+        raise SystemExit('--mod-root 与 --namespace 数量必须一致')
+
+    out_dir = Path(out)
+    base = Path(base)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    base_rows = read_tsv_rows(base / 'block_textures.tsv')
+    # 原版路径统一加 minecraft/ 前缀：这样所有贴图都落在 textures/<命名空间>/ 下，
+    # 模组与同名原版贴图不会互相覆盖。
+    rows = {}
+    for key, row in base_rows.items():
+        rows[key] = ['minecraft/' + p if p != '-' else '-' for p in row[:6]] + list(row[6:])
+    print('原版映射表：%d 个键' % len(rows))
+    unresolved = []
+    for mod_root, namespace in zip(mod_roots, namespaces):
+        before = len(rows)
+        resolve_namespace(Path(mod_root), namespace, rows, unresolved, base)
+        print('  %-14s 解析出 %d 个键（来自 %s）' % (namespace, len(rows) - before, mod_root))
+    if unresolved:
+        print('  未解析的 blockstate %d 个，例如：%s'
+              % (len(unresolved), ', '.join(n for n, _ in unresolved[:5])))
+
+    write_tsv(out_dir / 'block_textures.tsv', rows)
+    shutil.copyfile(base / 'block_ids.tsv', out_dir / 'block_ids.tsv')
+
+    stats = {}
+    root_by_namespace = {'minecraft': base}
+    for mod_root, namespace in zip(mod_roots, namespaces):
+        root_by_namespace[namespace] = Path(mod_root)
+    copy_textures(rows, out_dir, root_by_namespace, stats)
+    print('复制贴图：', {k: v for k, v in stats.items() if k != '缺失'})
+    if stats.get('缺失'):
+        print('  缺失 %d 张（不会致命，导出时该面退化为没有贴图）：%s'
+              % (len(stats['缺失']), stats['缺失'][:3]))
+    print('\n完成：%s' % out_dir)
+    print('用法： LITTLETILES_ASSETS=%s ./LittleTilesReader' % out_dir)
+    return out_dir
+
+
 def main():
     parser = argparse.ArgumentParser(description='把模组贴图并进映射表')
     parser.add_argument('--mod-root', action='append', default=[],
@@ -158,43 +205,7 @@ def main():
                         help='原版素材目录（提供基础映射表与兜底贴图）')
     parser.add_argument('--out', type=Path, default=paths.assets_dir() / 'pack_snbt')
     args = parser.parse_args()
-
-    if len(args.mod_root) != len(args.namespace):
-        raise SystemExit('--mod-root 与 --namespace 数量必须一致')
-
-    out_dir = args.out
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    base_rows = read_tsv_rows(args.base / 'block_textures.tsv')
-    # 原版路径统一加 minecraft/ 前缀：这样所有贴图都落在 textures/<命名空间>/ 下，
-    # 模组与同名原版贴图不会互相覆盖。
-    rows = {}
-    for key, row in base_rows.items():
-        rows[key] = ['minecraft/' + p if p != '-' else '-' for p in row[:6]] + list(row[6:])
-    print('原版映射表：%d 个键' % len(rows))
-    unresolved = []
-    for mod_root, namespace in zip(args.mod_root, args.namespace):
-        before = len(rows)
-        resolve_namespace(Path(mod_root), namespace, rows, unresolved, args.base)
-        print('  %-14s 解析出 %d 个键（来自 %s）' % (namespace, len(rows) - before, mod_root))
-    if unresolved:
-        print('  未解析的 blockstate %d 个，例如：%s'
-              % (len(unresolved), ', '.join(n for n, _ in unresolved[:5])))
-
-    write_tsv(out_dir / 'block_textures.tsv', rows)
-    shutil.copyfile(args.base / 'block_ids.tsv', out_dir / 'block_ids.tsv')
-
-    stats = {}
-    root_by_namespace = {'minecraft': args.base}
-    for mod_root, namespace in zip(args.mod_root, args.namespace):
-        root_by_namespace[namespace] = Path(mod_root)
-    copy_textures(rows, out_dir, root_by_namespace, stats)
-    print('复制贴图：', {k: v for k, v in stats.items() if k != '缺失'})
-    if stats.get('缺失'):
-        print('  缺失 %d 张（不会致命，导出时该面退化为没有贴图）：%s'
-              % (len(stats['缺失']), stats['缺失'][:3]))
-    print('\n完成：%s' % out_dir)
-    print('用法： LITTLETILES_ASSETS=%s ./LittleTilesReader' % out_dir)
+    build_pack_snbt(args.mod_root, args.namespace, args.base, args.out)
     return 0
 
 

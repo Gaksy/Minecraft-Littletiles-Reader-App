@@ -91,3 +91,4 @@ env/
 Thumbs.db
 desktop.ini
 .DS_Store
+/app/_buildinfo.py

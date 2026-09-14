@@ -131,7 +131,17 @@ def busy_dialog(title: str, text: str, parent) -> QProgressDialog:
 
 class MainWindow(QMainWindow):
     def _git_revision(self) -> str:
-        """当前跑的是哪次提交——"我到底测的是哪版"这个问题，一行就答了。"""
+        """当前跑的是哪次提交——"我到底测的是哪版"这个问题，一行就答了。
+
+        打包后没有 `.git`，这时读 `app/_buildinfo.py`（构建脚本写入的提交号）。
+        """
+        from ..buildinfo import load as load_buildinfo
+
+        info = load_buildinfo()
+        if info.commit:
+            return info.commit
+        if info.frozen:
+            return i18n.tr("打包版（构建信息缺失）")
         try:
             done = subprocess.run(
                 ["git", "-C", str(APP_DIR), "rev-parse", "--short", "HEAD"],
