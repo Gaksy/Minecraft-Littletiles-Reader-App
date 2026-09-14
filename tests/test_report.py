@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import sys
 import tempfile
 import urllib.error
@@ -21,6 +22,9 @@ from app import update as update_mod  # noqa: E402
 from app.api import ApiClient, ApiError  # noqa: E402
 from app.report import (  # noqa: E402
     DESC_MAX,
+    collect_logs_tar,
+    recent_logs,
+    upload_bundle,
     Report,
     ReportStore,
     attach_log,
@@ -162,6 +166,104 @@ def test_payload() -> None:
 
     check("日志尾部能读出来", isinstance(log_tail(ROOT / "不存在.log"), str))
 
+    seen: dict = {}
+
+    def opener(request):
+        seen["payload"] = json.loads(request.data.decode("utf-8"))
+        return json.dumps({"success": True, "payload": {"bugNo": "20260914-001",
+                                                        "dataCode": "ABCD2345",
+                                                        "uploadToken": "9f3c"}}).encode("utf-8")
+
+    submit(Report(title="t", description="d"), ApiClient(opener=opener), want_attachment=True)
+    check("要附件时带上 wantAttachment 标记",
+          seen["payload"].get("wantAttachment") is True, str(seen["payload"].get("wantAttachment")))
+    submit(Report(title="t", description="d"), ApiClient(opener=opener))
+    check("不要附件时不带这个字段（保持老契约）",
+          "wantAttachment" not in seen["payload"], str(sorted(seen["payload"])))
+
+
+def test_logs(tmp: Path) -> None:
+    print("日志包：")
+    logs = tmp / "logs"
+    (logs / "reports").mkdir(parents=True)
+    fresh = logs / "2026-09-14_100000.log"
+    fresh.write_text("app=0.1.0\nerror at /Users/gaksy/proj/app/main.py:12\n" * 300,
+                     encoding="utf-8")
+    old = logs / "2026-09-01_100000.log"
+    old.write_text("很旧的一行\n", encoding="utf-8")
+    os.utime(old, (time.time() - 3 * 86400,) * 2)
+
+    window = recent_logs(tmp, hours=24)
+    names = [item.rel for item in window]
+    check("24 小时内动的日志才算", names == ["2026-09-14_100000.log"], str(names))
+
+    bundle = collect_logs_tar(tmp, 24, diagnostics_text="app=0.1.0；os=Darwin")
+    check("打成了 tar.gz", bundle is not None and bundle.path.is_file()
+          and bundle.name.endswith(".tar.gz"), str(bundle))
+    check("文件数对得上", bundle.files == 1, str(bundle.files))
+    check("算了 sha256", len(bundle.sha256) == 64, bundle.sha256[:16])
+
+    import tarfile
+    with tarfile.open(bundle.path) as archive:
+        inside = archive.getnames()
+        readme = archive.extractfile("README.txt").read().decode("utf-8")
+        body = archive.extractfile("logs/2026-09-14_100000.log").read().decode("utf-8")
+    check("包内有 README 与日志", "README.txt" in inside
+          and "logs/2026-09-14_100000.log" in inside, str(inside))
+    check("README 写了时间窗与诊断", "24 小时" in readme and "os=Darwin" in readme)
+    check("日志做了脱敏", "gaksy" not in body and "~/…/app/main.py" in body,
+          body.splitlines()[1] if len(body.splitlines()) > 1 else body)
+    check("旧日志没进包", "2026-09-01_100000.log" not in " ".join(inside), str(inside))
+    check("上一次打的包不会再被包一遍",
+          not any(n.endswith(".tar.gz") for n in inside), str(inside))
+
+    # 体积上限：把上限压到很小，只装得下最新的那个
+    small = collect_logs_tar(tmp, 24, max_bytes=4096, out_dir=tmp / "out")
+    check("超上限时连一份都放不下 → 只留尾部，包不超上限",
+          small is not None and small.files == 1 and small.size <= 4096,
+          "files=%s size=%s" % (small.files if small else None, small.size if small else None))
+    with tarfile.open(small.path) as archive:
+        note = archive.extractfile("README.txt").read().decode("utf-8")
+        tail_name = [n for n in archive.getnames() if "仅尾部" in n]
+    check("README 说明了只留尾部", "只留了尾部" in note,
+          " / ".join(line for line in note.splitlines() if "上限" in line))
+    check("包内文件名也标了", len(tail_name) == 1, str(tail_name))
+
+
+def test_upload(tmp: Path) -> None:
+    print("日志包上传（multipart）：")
+    bundle_file = tmp / "littletiles-logs-test.tar.gz"
+    bundle_file.write_bytes(b"\x1f\x8b fake gzip")
+    bundle = report_mod.LogBundle(path=bundle_file, name=bundle_file.name,
+                                  size=bundle_file.stat().st_size, sha256="a" * 64,
+                                  files=3, hours=24, redacted=True)
+    seen: dict = {}
+
+    def opener(request):
+        seen["url"] = request.full_url
+        seen["type"] = request.get_header("Content-type") or ""
+        seen["body"] = request.data or b""
+        return json.dumps({"success": True, "payload": {"name": bundle.name,
+                                                        "size": bundle.size,
+                                                        "sha256": bundle.sha256}}
+                          ).encode("utf-8")
+
+    result = upload_bundle(bundle, "9f3c" * 8, ApiClient(opener=opener))
+    check("打到了附件接口", seen["url"].endswith("/feedback/attach"), seen["url"])
+    check("用的是 multipart", seen["type"].startswith("multipart/form-data; boundary="),
+          seen["type"])
+    check("带上了 uploadToken 字段", b'name="uploadToken"' in seen["body"])
+    check("带上了文件与文件名", b'name="file"; filename="' in seen["body"]
+          and b"fake gzip" in seen["body"])
+    check("服务器回的是元信息", result.get("sha256") == "a" * 64, str(result))
+
+    try:
+        upload_bundle(bundle, "")
+        raised = ""
+    except ApiError as error:
+        raised = error.kind
+    check("没凭证就直说", raised == "client", raised)
+
 
 def test_store(tmp: Path) -> None:
     print("留痕：")
@@ -187,7 +289,10 @@ def main() -> int:
     test_redact()
     test_payload()
     with tempfile.TemporaryDirectory(prefix="lt-report-") as tmp:
-        test_store(Path(tmp))
+        root = Path(tmp)
+        test_logs(root / "logs-case")
+        test_upload(root)
+        test_store(root)
     print()
     if FAILURES:
         print("失败 %d 项: %s" % (len(FAILURES), ", ".join(FAILURES)))

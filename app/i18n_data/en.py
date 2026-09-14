@@ -508,4 +508,24 @@ STRINGS = {
 
     # ---- 检查更新：条目在但没发布 ----
     '服务器上这个平台（%s）还没发布：版本号或下载地址还没填': 'This platform (%s) has no release yet: version or download link is still empty',
+
+    # ---- 反馈界面重做 + 日志包 ----
+    '反馈问题': 'Report a problem',
+    '写清问题就好；下面的日志包会帮我们还原现场（发送前你可以先看一眼）。': 'Just describe the problem; the log bundle below helps reproduce it (you can review everything before sending).',
+    '问题': 'Problem',
+    '将发送的内容': 'What will be sent',
+    '诊断只含版本、系统与库版本；日志已去掉本机用户名与绝对路径。': 'Diagnostics contain versions, OS and library version only; logs have local user names and absolute paths stripped.',
+    '把最近 %d 小时的日志打包上传（推荐）': 'Bundle and upload the last %d hours of logs (recommended)',
+    '会打包成 tar.gz（脱敏后）：%d 个文件，约 %s': 'Will be packed into tar.gz (redacted): %d file(s), about %s',
+    '不附带日志：只提交上面的文字与诊断。': 'No logs attached: only the text and diagnostics above are sent.',
+    '已提交：编号 %s，数据码 %s。': 'Submitted: number %s, data code %s.',
+    '本机留了一份：%s': 'A local copy is kept at: %s',
+    '没有可打包的日志（这次会话还没写日志文件）。': 'No logs to bundle (this session has not written a log file yet).',
+    '日志包已生成，但服务器还没开启附件上传；文件在本机：\n%s': 'The log bundle was created, but the server does not accept attachments yet; the file is local:\n%s',
+    '日志包上传失败（%s）：文件在本机：\n%s': 'Log upload failed (%s); the file is local:\n%s',
+    '日志包已上传：%s（%s，%d 个文件）': 'Log bundle uploaded: %s (%s, %d file(s))',
+    '服务器上限 %d 字符，当前 %d（超了会被截断）': 'Server limit %d characters, currently %d (longer text is truncated)',
+    '一句话说清问题（必填）': 'Say the problem in one line (required)',
+    '复现步骤、期望结果、实际结果（越具体越好）': 'Steps to reproduce, expected result, actual result (the more specific the better)',
+    '发送反馈': 'Send report',
 }

@@ -19,9 +19,12 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import secrets
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 from . import __version__
 from .applog import logger
@@ -56,13 +59,63 @@ class ApiClient:
     def post_json(self, path: str, payload: dict | None = None) -> object:
         return self._call("POST", path, payload if payload is not None else {})
 
+    def post_file(
+        self,
+        path: str,
+        file_path: Path | str,
+        fields: dict | None = None,
+        field_name: str = "file",
+    ) -> object:
+        """multipart/form-data 上传一个文件（附件这类）。
+
+        手写而不是引第三方：只要一段 body + 一个 boundary，标准库够用；
+        `requests` 那点便利不值得为它多一个依赖。
+        """
+
+        target = Path(file_path)
+        if not target.is_file():
+            raise ApiError("要上传的文件不在了：%s" % target, kind="client")
+        boundary = "----LittleTilesBoundary%s" % secrets.token_hex(12)
+        body = bytearray()
+
+        def part(headers: list[str], payload: bytes) -> None:
+            body.extend(("--%s\r\n" % boundary).encode())
+            for line in headers:
+                body.extend((line + "\r\n").encode())
+            body.extend(b"\r\n")
+            body.extend(payload)
+            body.extend(b"\r\n")
+
+        for key, value in (fields or {}).items():
+            part(['Content-Disposition: form-data; name="%s"' % key],
+                 str(value).encode("utf-8"))
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        part(
+            [
+                'Content-Disposition: form-data; name="%s"; filename="%s"'
+                % (field_name, target.name),
+                "Content-Type: %s" % content_type,
+            ],
+            target.read_bytes(),
+        )
+        body.extend(("--%s--\r\n" % boundary).encode())
+        return self._call("POST", path, None, raw=bytes(body),
+                          content_type="multipart/form-data; boundary=%s" % boundary)
+
     # ---- 内部 ----
 
     def _url(self, path: str) -> str:
         base = (self.base or DEFAULT_BASE).rstrip("/")
         return base + (path if path.startswith("/") else "/" + path)
 
-    def _call(self, method: str, path: str, payload: dict | None) -> object:
+    def _call(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None,
+        raw: bytes | None = None,
+        content_type: str | None = None,
+    ) -> object:
         url = self._url(path)
         body = None
         headers = {
@@ -70,7 +123,10 @@ class ApiClient:
             # 带上应用版本：服务器日志里能看出是哪个客户端的请求
             "User-Agent": "LittleTilesReader/%s (+desktop)" % __version__,
         }
-        if payload is not None:
+        if raw is not None:
+            body = raw
+            headers["Content-Type"] = content_type or "application/octet-stream"
+        elif payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json; charset=utf-8"
         request = urllib.request.Request(url, data=body, headers=headers, method=method)

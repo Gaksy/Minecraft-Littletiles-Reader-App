@@ -43,6 +43,29 @@ def client_returning(result: dict) -> ApiClient:
     return ApiClient(opener=opener)
 
 
+class _TwoStep:
+    """两段式替身：/feedback/submit 发凭证，/feedback/attach 收附件。"""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.payload: dict = {}
+        self.file_bytes = 0
+
+    def __call__(self, request):
+        url = request.full_url
+        self.calls.append(url)
+        if url.endswith("/feedback/attach"):
+            self.file_bytes = len(request.data or b"")
+            return json.dumps({"success": True, "payload": {
+                "name": "logs.tar.gz", "size": self.file_bytes, "sha256": "b" * 64}
+            }).encode("utf-8")
+        self.payload = json.loads((request.data or b"{}").decode("utf-8"))
+        return json.dumps({"success": True, "payload": {
+            "bugId": 9, "bugNo": "20260914-009", "dataCode": "WXYZ2345",
+            "uploadToken": "9f3c" * 8,
+        }}).encode("utf-8")
+
+
 def main() -> int:
     print("== 反馈与更新对话框 ==")
     application = QApplication.instance() or QApplication([])
@@ -52,12 +75,14 @@ def main() -> int:
         root = Path(tmp)
         config = AppConfig()
         config.save = lambda path=None: root / "app.json"
+        (root / "logs").mkdir(parents=True, exist_ok=True)
+        (root / "logs" / "2026-09-14_180000.log").write_text(
+            "app=0.1.0\n正在导出\n" * 30, encoding="utf-8")
 
         # ---- 反馈表单 ----
+        client = _TwoStep()
         dialog = ReportDialog(
-            config, root, None,
-            client=client_returning({"bugId": 7, "bugNo": "20260914-007",
-                                     "dataCode": "ABCD2345"}),
+            config, root, None, client=ApiClient(opener=client),
             extra={"library": "0.2.0-beta"},
         )
         dialog.show()
@@ -66,6 +91,11 @@ def main() -> int:
               "app=" in dialog.preview.toPlainText()
               and "0.2.0-beta" in dialog.preview.toPlainText(),
               dialog.preview.toPlainText()[:80])
+        check("列出了要打包的日志",
+              "2026-09-14_180000.log" in dialog.bundle_list.text(),
+              dialog.bundle_list.text()[:60])
+        check("附件说明写了体积", "KB" in dialog.bundle_hint.text() or "B" in dialog.bundle_hint.text(),
+              dialog.bundle_hint.text())
         check("字符计数在提示上限",
               "2000" in dialog.counter.text(), dialog.counter.text())
 
@@ -83,12 +113,19 @@ def main() -> int:
         dialog._send()
         application.processEvents()
         text = dialog.result.text()
+        check("提交时带上了 wantAttachment 标记",
+              client.payload.get("wantAttachment") is True, str(client.payload.get("wantAttachment")))
         check("发送成功后显示编号与数据码",
-              "20260914-007" in text and "ABCD2345" in text, text.replace("\n", " | "))
+              "20260914-009" in text and "WXYZ2345" in text, text.replace("\n", " | "))
+        check("接着把日志包传上去了",
+              any(url.endswith("/feedback/attach") for url in client.calls)
+              and client.file_bytes > 0,
+              "%s / %d 字节" % (client.calls, client.file_bytes))
+        check("结果里说了日志包已上传", "日志包已上传" in text, text.replace("\n", " | "))
         check("复制按钮可用了", dialog.btn_copy.isEnabled())
         store = ReportStore.load(root)
         check("编号与数据码也落盘了",
-              store.latest() is not None and store.latest()["bugNo"] == "20260914-007",
+              store.latest() is not None and store.latest()["bugNo"] == "20260914-009",
               str(store.items))
         check("本机留了一份完整内容",
               dialog._log_path is not None and dialog._log_path.is_file(),

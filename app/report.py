@@ -20,11 +20,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 import platform
 import re
 import sys
+import tarfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -39,11 +43,16 @@ LOG_TAIL = 1200              # 留给日志的字符数（剩下的给正文与�
 
 SUBMIT_PATH = "/feedback/submit"
 QUERY_PATH = "/feedback/query"
+ATTACH_PATH = "/feedback/attach"
 
 #: 服务器只认 web / server / account / site / other（评估里建议加 app）
 DEFAULT_MODULE = "other"
 SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 TYPES = ("bug", "suggestion")
+
+#: 日志包：默认打最近 24 小时，客户端自留上限 8 MB（服务器还有更硬的限制）
+LOG_WINDOW_HOURS = 24
+BUNDLE_MAX_BYTES = 8 * 1024 * 1024
 
 
 @dataclass
@@ -131,6 +140,220 @@ def log_tail(path: Path | str | None = None, limit: int = LOG_TAIL) -> str:
     return redact(tail)
 
 
+# ---- 日志包（近 24 小时 → tar.gz） --------------------------------------
+
+@dataclass
+class LogBundle:
+    """打好包的日志：交给服务器附件接口上传。"""
+
+    path: Path
+    name: str
+    size: int
+    sha256: str
+    files: int
+    hours: int
+    redacted: bool
+    skipped: int = 0          # 因为超过体积上限没装进去的文件数
+
+
+@dataclass
+class LogFile:
+    path: Path
+    rel: str
+    mtime: float
+    size: int
+
+
+def recent_logs(app_dir: Path | str, hours: int = LOG_WINDOW_HOURS) -> list[LogFile]:
+    """最近 N 小时动过的日志文件（会话日志 + 反馈留档）。
+
+    按修改时间筛，不是按文件名——会话日志的文件名带启动时间，但**一直写到退出**，
+    所以"今天凌晨启动、现在还在写"的那份也必须算进来。
+    """
+
+    root = Path(app_dir) / "logs"
+    if not root.is_dir():
+        return []
+    cutoff = time.time() - hours * 3600
+    found: list[LogFile] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        # 压缩包一律不收：`logs/reports/` 里放的就是历次打的日志包，
+        # 不排除的话"这次的包会把上次的包再包一遍"，越滚越大
+        lowered = path.name.lower()
+        if lowered.endswith((".tar.gz", ".tgz", ".zip", ".tar")):
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime < cutoff:
+            continue
+        found.append(
+            LogFile(
+                path=path,
+                rel=str(path.relative_to(root)).replace(os.sep, "/"),
+                mtime=stat.st_mtime,
+                size=stat.st_size,
+            )
+        )
+    # 新的排前面：超上限时先保新的
+    found.sort(key=lambda item: item.mtime, reverse=True)
+    return found
+
+
+def collect_logs_tar(
+    app_dir: Path | str,
+    hours: int = LOG_WINDOW_HOURS,
+    *,
+    diagnostics_text: str = "",
+    redacted: bool = True,
+    max_bytes: int = BUNDLE_MAX_BYTES,
+    out_dir: Path | str | None = None,
+) -> LogBundle | None:
+    """把最近 N 小时的日志打成一个 tar.gz，返回包信息（没有日志就返回 None）。
+
+    * 默认**脱敏**后再进包（家目录 → ~、绝对路径只留末两级）：日志里几乎每行都有路径，
+      原样上传等于把"本机用户名 + 目录结构"送给服务器；
+    * 超过 `max_bytes` 时**从最旧的开始丢**，并把丢掉的条数写进 README；
+    * 包内一定带一份 `README.txt`：版本、诊断、时间窗、清单——管理员不查数据库也能看懂。
+    """
+
+    app_dir = Path(app_dir)
+    files = recent_logs(app_dir, hours)
+    when = datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = "littletiles-logs-%s.tar.gz" % when
+    target_dir = Path(out_dir) if out_dir else app_dir / "logs" / "reports"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / name
+
+    # `max_bytes` 约束的是**成品包**大小（正文之外还有 tar 头、gzip 头与 README）。
+    # 先按"上限 - 预留"排一遍，写完量一次；超了就按超出的量回缩重排，最多来回几次。
+    OVERHEAD = 4096
+    budget = max(256, max_bytes - OVERHEAD)
+    kept: list[tuple[LogFile, bytes, bool]] = []
+    skipped = 0
+    for attempt in range(6):
+        kept, skipped, rendered = _select_logs(files, budget, redacted)
+        _write_bundle(target, kept, rendered, skipped, hours, max_bytes,
+                      diagnostics_text, redacted)
+        size = target.stat().st_size
+        if size <= max_bytes or budget <= 256:
+            break
+        budget = max(256, budget - (size - max_bytes) - 256)
+
+    if not kept and not diagnostics_text:
+        target.unlink(missing_ok=True)
+        return None
+
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    return LogBundle(
+        path=target,
+        name=name,
+        size=target.stat().st_size,
+        sha256=digest,
+        files=len(kept),
+        hours=hours,
+        redacted=redacted,
+        skipped=skipped,
+    )
+
+
+def _select_logs(files, budget: int, redacted: bool):
+    """按预算挑日志：优先新的；超预算的整份丢；一份都放不下时只留尾部。"""
+    kept: list[tuple[LogFile, bytes, bool]] = []
+    skipped = 0
+    total = 0
+    for item in files:
+        remaining = budget - total
+        if remaining <= 0:
+            skipped += 1
+            continue
+        try:
+            text = item.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if redacted:
+            text = redact(text)
+        payload = text.encode("utf-8")
+        truncated = False
+        if len(payload) > remaining:
+            if kept:
+                skipped += 1
+                continue
+            payload = payload[-remaining:]
+            truncated = True
+        total += len(payload)
+        kept.append((item, payload, truncated))
+    return kept, skipped, total
+
+
+def _write_bundle(target, kept, rendered, skipped, hours, max_bytes,
+                  diagnostics_text, redacted) -> None:
+    with tarfile.open(target, "w:gz") as archive:
+        for item, payload, truncated in reversed(kept):     # 包里按时间正序
+            info = tarfile.TarInfo(
+                name="logs/" + item.rel + ("（仅尾部）" if truncated else "")
+            )
+            info.size = len(payload)
+            info.mtime = int(item.mtime)
+            archive.addfile(info, io.BytesIO(payload))
+
+        readme = "\n".join(
+            [
+                "LittleTiles Reader 日志包",
+                "打包时间：%s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "时间窗：最近 %d 小时（按修改时间）" % hours,
+                "脱敏：%s" % ("是（家目录→~，绝对路径只留末两级）" if redacted else "否"),
+                "文件数：%d%s"
+                % (
+                    len(kept),
+                    ("（另有 %d 个因体积上限未装入）" % skipped) if skipped else "",
+                ),
+                "包大小上限：%d 字节%s"
+                % (max_bytes, "（超上限的那份只留了尾部）"
+                   if any(flag for _, _, flag in kept) else ""),
+                "",
+                "—— 诊断 ——",
+                diagnostics_text or "（无）",
+                "",
+                "—— 清单 ——",
+            ]
+            + [
+                "%s\t%s%s\t%d 字节"
+                % (
+                    datetime.fromtimestamp(item.mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                    item.rel,
+                    "（仅尾部）" if truncated else "",
+                    len(payload),
+                )
+                for item, payload, truncated in reversed(kept)
+            ]
+            + ["", "说明：日志里的路径已按上面的规则处理；不含存档内容与项目数据。", ""]
+        ).encode("utf-8")
+        info = tarfile.TarInfo(name="README.txt")
+        info.size = len(readme)
+        info.mtime = int(time.time())
+        archive.addfile(info, io.BytesIO(readme))
+
+
+def upload_bundle(bundle: LogBundle, upload_token: str, client: ApiClient | None = None) -> dict:
+    """把日志包交给服务器（需要提交反馈时拿到的 uploadToken，一次有效）。"""
+
+    if not upload_token:
+        raise ApiError("这条反馈没有拿到上传凭证", kind="client")
+    client = client or ApiClient()
+    result = client.post_file(
+        ATTACH_PATH, bundle.path, fields={"uploadToken": upload_token}
+    )
+    logger().info(
+        "日志包已上传：%s（%d 字节，sha256=%s）",
+        bundle.name, bundle.size, bundle.sha256[:12],
+    )
+    return result if isinstance(result, dict) else {}
+
+
 # ---- 拼装与提交 ---------------------------------------------------------
 
 def attach_log(report: Report) -> Report:
@@ -162,12 +385,24 @@ def build_payload(report: Report, *, page_url: str = "desktop-app") -> dict:
     }
 
 
-def submit(report: Report, client: ApiClient | None = None) -> dict:
-    """提交一次反馈，返回服务器的 `{bugId, bugNo, dataCode}`。"""
+def submit(
+    report: Report,
+    client: ApiClient | None = None,
+    *,
+    want_attachment: bool = False,
+) -> dict:
+    """提交一次反馈，返回服务器的 `{bugId, bugNo, dataCode, uploadToken?}`。
+
+    `want_attachment=True` 时请服务器发一张上传凭证（`uploadToken`），
+    接着用 `upload_bundle()` 把日志包传上去——分开两步是因为服务器那边
+    提交是 JSON、附件是 multipart，而且附件失败不该影响"反馈已经提交"。
+    """
 
     client = client or ApiClient()
     attach_log(report)
     payload = build_payload(report)
+    if want_attachment:
+        payload["wantAttachment"] = True
     report.payload = payload
     if len(payload["description"]) > DESC_MAX:
         raise ApiError("描述太长了", kind="client")

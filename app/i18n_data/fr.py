@@ -491,4 +491,24 @@ STRINGS = {
 
     # ---- 检查更新：条目在但没发布 ----
     '服务器上这个平台（%s）还没发布：版本号或下载地址还没填': "Cette plateforme (%s) n'est pas encore publiée : version ou lien manquant",
+
+    # ---- 反馈界面重做 + 日志包 ----
+    '反馈问题': 'Signaler un problème',
+    '写清问题就好；下面的日志包会帮我们还原现场（发送前你可以先看一眼）。': "Décrivez le problème ; l'archive de logs ci-dessous aide à reproduire (vérifiable avant envoi).",
+    '问题': 'Problème',
+    '将发送的内容': 'Ce qui sera envoyé',
+    '诊断只含版本、系统与库版本；日志已去掉本机用户名与绝对路径。': 'Les diagnostics ne contiennent que versions, OS et bibliothèque ; logs anonymisés.',
+    '把最近 %d 小时的日志打包上传（推荐）': 'Joindre les logs des %d dernières heures (recommandé)',
+    '会打包成 tar.gz（脱敏后）：%d 个文件，约 %s': 'Sera empaqueté en tar.gz (anonymisé) : %d fichier(s), environ %s',
+    '不附带日志：只提交上面的文字与诊断。': 'Sans logs : seuls le texte et les diagnostics sont envoyés.',
+    '已提交：编号 %s，数据码 %s。': 'Envoyé : numéro %s, code %s.',
+    '本机留了一份：%s': 'Copie locale : %s',
+    '没有可打包的日志（这次会话还没写日志文件）。': "Aucun log à empaqueter (cette session n'en a pas encore écrit).",
+    '日志包已生成，但服务器还没开启附件上传；文件在本机：\n%s': "L'archive est prête, mais le serveur n'accepte pas encore de pièces jointes :\n%s",
+    '日志包上传失败（%s）：文件在本机：\n%s': "Échec de l'envoi des logs (%s) :\n%s",
+    '日志包已上传：%s（%s，%d 个文件）': 'Logs envoyés : %s (%s, %d fichier(s))',
+    '服务器上限 %d 字符，当前 %d（超了会被截断）': 'Limite serveur %d caractères, actuellement %d (le surplus est tronqué)',
+    '一句话说清问题（必填）': 'Le problème en une ligne (obligatoire)',
+    '复现步骤、期望结果、实际结果（越具体越好）': "Étapes, résultat attendu, résultat réel (plus c'est précis, mieux c'est)",
+    '发送反馈': 'Envoyer',
 }

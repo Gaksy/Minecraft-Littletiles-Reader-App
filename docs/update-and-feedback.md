@@ -40,21 +40,39 @@
 
 ### 2.2 BUG 反馈 + 自动提交日志 —— 反馈能提，日志要绕一下
 
-`/feedback/submit` 已经够用（匿名、有数据码可以追进度），但**没有附件字段**，
-也**没有公开上传接口**，所以"自动附带日志"有三种落法：
+**日志附件：服务端已实现（本轮新增）**，走两段式，附件**不进** `description`：
 
-| 方案 | 现在可行 | 代价 |
-|---|---|---|
-| A. 日志尾部塞进 `description` | ✅ 立刻可用 | 受 2000 字符限制，只能截断；用户自己写的内容和日志抢空间 |
-| B. 服务端加 `diagnostics` 文本字段（≤20 KB） | ❌ 要改后端 | 一次小改：DTO + 实体列 + 长度校验；之后客户端零改动 |
-| C. 服务端加公开上传接口 `/public/feedback/attach` | ❌ 要改后端 | 需要限流、类型/大小校验、防滥用，成本最高 |
+```
+1) POST /feedback/submit  { …, "wantAttachment": true }
+   → { bugId, bugNo, dataCode, uploadToken }        // 凭证 30 分钟、用一次即失效
+2) POST /feedback/attach  multipart: uploadToken + file
+   → { name, size, sha256 }                          // 后端重算 sha256，对得上才算收全
+3) 后台 POST /feedback/attachment?bugId=  下载（需 bug:manage，流式返回）
+```
 
-**实现选 A，并按 B 预留**：客户端的 `report.py` 里把"日志怎么交"做成一个明确的开关
-（`ATTACH_MODE`），B 上线后改一行即可；完整日志同时落在本机
-`logs/reports/<时间戳>_<编号>.txt`，方便你自己回看或手工补发。
+落盘规则（见服务器仓库 `deploy/sql/feedback_attachment.sql` 与
+`FeedbackServiceImpl`）：
+
+- 目录：`app.feedback.attach-dir`（默认 `~/inception-work/feedback-attachments`）——
+  **故意不放** `app.upload-dir`，因为那个目录挂在 `/uploads/**` 上是公开可读的，
+  而日志里带路径，不该让人猜到 URL 就能下；
+- 大小/类型：默认 ≤ **8 MB**（`app.feedback.attach-max-bytes`），只收
+  `tar.gz / tgz / zip / log / txt`；
+- 详情接口只回 `hasAttachment / attachmentName / attachmentSize / attachmentSha256`，
+  不暴露落盘路径；后台页面在多了一条「日志附件」区块 + 「下载日志附件」按钮。
+
+客户端（`app/report.py`）对应做四件事：
+
+1. 取**最近 24 小时**动过的日志（按 mtime，不按文件名——凌晨启动、现在还在写的那份也要算）；
+2. **先脱敏再进包**（家目录 → `~`、绝对路径只留末两级），包内附一份 `README.txt`
+   （版本、系统、时间窗、清单），管理员不查库也能看懂；
+3. 上限按**成品包**算（默认 8 MB）：超了先丢最旧的，连一份都放不下时只留尾部并在
+   文件名与 README 上标明；上次打的包不会被再包一遍（排除 `*.tar.gz/zip`）；
+4. 附件上传失败**不影响"反馈已提交"**——编号与数据码照给，并提示本机那份包的路径。
 
 顺带建议（都是一行的事）：`module` 集合加一个 `app`（现在客户端只能报 `other`，
-后台分不清是桌面应用还是网站来的）。
+后台分不清是桌面应用还是网站来的）；`diagnostics` 文本字段仍然值得加——它能让
+"反馈正文"与"日志附件"分开存，检索起来更干净。
 
 ## 3. 客户端怎么做（已实现）
 
