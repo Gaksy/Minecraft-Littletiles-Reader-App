@@ -133,14 +133,24 @@ def pyinstaller_command(name: str, with_reader: bool) -> list[str]:
     return command
 
 
-def copy_reader(target_dir: Path) -> None:
-    """把库编出来的 CLI 拷到包根（形态 B）。"""
+def copy_reader(target_dir: Path, explicit: str | None = None) -> None:
+    """把库编出来的 CLI 拷到包根（形态 B）。
 
-    from ltgen import paths
+    `--reader` 给了就用它（Windows 上常见 Release 目录），否则按 `ltgen.paths` 找。
+    """
 
-    executable = paths.reader_executable()
+    if explicit:
+        executable = Path(explicit).expanduser().resolve()
+    else:
+        from ltgen import paths
+
+        executable = paths.reader_executable()
     if not executable.is_file():
-        raise SystemExit("找不到 LittleTilesReader：%s（先在库仓库构建一次）" % executable)
+        raise SystemExit(
+            "找不到 LittleTilesReader：%s\n"
+            "先在库仓库构建一次（见 docs/packaging-howto.md 的第 2 步），"
+            "或显式指定 --reader <路径>" % executable
+        )
     shutil.copy2(executable, target_dir / executable.name)
     # macOS 上动态库要跟着走（Windows 那边 CMake 会把 nbt++.dll 放到 exe 旁边）
     for lib in executable.parent.glob("*.dylib"):
@@ -148,16 +158,21 @@ def copy_reader(target_dir: Path) -> None:
     print("已放入 reader：%s" % executable.name)
 
 
-def copy_docs(target_dir: Path) -> None:
-    """许可与说明随包发（LGPL/OFL 都要求带上文本）。"""
+def copy_docs(target_dir: Path, with_reader: bool = False) -> None:
+    """许可与说明随包发（LGPL/OFL/GPL 都要求带上文本，别漏）。"""
 
-    for name in ("LICENSE", "THIRD-PARTY.md"):
-        source = ROOT / name
+    for name in ("LICENSE", "THIRD-PARTY.md", "README-unsigned.md"):
+        source = ROOT / "packaging" / name if name == "README-unsigned.md" else ROOT / name
         if source.is_file():
             shutil.copy2(source, target_dir / name)
     fonts_license = ROOT / "app" / "resources" / "fonts" / "OFL.txt"
     if fonts_license.is_file():
         shutil.copy2(fonts_license, target_dir / "OFL.txt")
+    if with_reader:
+        # 形态 B：分发包含 CGAL 的 GPL 代码，必须带上 GPL 全文（docs/licenses.md）
+        licenses = ROOT / "packaging" / "licenses"
+        for text in sorted(licenses.glob("*.txt")):
+            shutil.copy2(text, target_dir / text.name)
 
 
 def zip_dir(folder: Path) -> Path:
@@ -185,6 +200,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="打包 LittleTiles Reader 桌面应用")
     parser.add_argument("--with-reader", action="store_true",
                         help="把 LittleTilesReader 一起打进包（整包 GPL-3.0-or-later）")
+    parser.add_argument("--reader", metavar="PATH",
+                        help="LittleTilesReader 的位置（默认按 ltgen.paths 自动找）")
     parser.add_argument("--no-zip", action="store_true", help="只出目录，不压缩")
     parser.add_argument("--keep-buildinfo", action="store_true",
                         help="保留生成的 app/_buildinfo.py（默认保留；此开关只为显式表达）")
@@ -215,8 +232,8 @@ def main() -> int:
     built.rename(target)
 
     if args.with_reader:
-        copy_reader(target)
-    copy_docs(target)
+        copy_reader(target, args.reader)
+    copy_docs(target, args.with_reader)
 
     total = sum(item.stat().st_size for item in target.rglob("*") if item.is_file())
     print("产物目录：%s（%s）" % (target, human(total)))

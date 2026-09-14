@@ -10,6 +10,8 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass, field
+
+from .applog import logger
 from pathlib import Path
 
 # 仓库根 = 应用目录。打包后它就是安装目录（便携式），所以配置与受管资源都放在旁边。
@@ -42,7 +44,34 @@ def data_dir() -> Path:
     """
 
     override = os.environ.get("LTR_HOME")
-    return Path(override).expanduser() if override else APP_DIR
+    if override:
+        return Path(override).expanduser()
+    if getattr(sys, "frozen", False):
+        # 打包版：数据就放在**应用所在文件夹**（便携：用户看得见、拷走就带走）
+        from .reader import app_folder
+
+        candidate = app_folder()
+        try:
+            probe = candidate / ".ltr-write-test"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            return candidate
+        except OSError:
+            fallback = _user_data_dir()
+            logger().warning("应用目录不可写，数据改放：%s", fallback)
+            return fallback
+    return APP_DIR
+
+
+def _user_data_dir() -> Path:
+    """应用目录不可写时的退路（macOS/Windows/Linux 各自的用户数据目录）。"""
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "LittleTilesReader"
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(base) / "LittleTilesReader"
+    return Path.home() / ".local" / "share" / "LittleTilesReader"
 
 
 def config_path() -> Path:

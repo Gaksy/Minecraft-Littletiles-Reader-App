@@ -282,9 +282,14 @@ class MainWindow(QMainWindow):
     # ---- 依赖解析 --------------------------------------------------------
 
     def _cli_path(self) -> Path:
-        if self.config.library_cli:
-            return Path(self.config.library_cli)
-        return paths.reader_executable()
+        """CLI 在哪：配置 → **应用旁边**（打包版自带）→ 库仓库构建产物。
+
+        打包版把库和客户端装在一起，所以"应用旁边"必须优先于库仓库路径——
+        用户的机器上根本没有那个仓库。
+        """
+        from .. import reader
+
+        return reader.locate(self.config.library_cli or None)
 
     def _choose_assets(self) -> str | None:
         """决定这次用哪套素材：**默认沿用上次的选择**，走缓存。
