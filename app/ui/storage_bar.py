@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QRectF, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -48,6 +48,7 @@ class StorageBar(QWidget):
         super().__init__(parent)
         self._segments: list[Segment] = []
         self._highlight = -1
+        self._grow = 1.0                 # 容量条的"长大"进度（1 = 到位）
         self.setMinimumHeight(BAR_HEIGHT)
         self.setMaximumHeight(BAR_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -59,6 +60,26 @@ class StorageBar(QWidget):
     def set_segments(self, segments: list[Segment]) -> None:
         self._segments = list(segments)
         self._highlight = -1
+        self._start_grow()
+        self.update()
+
+    def _start_grow(self) -> None:
+        """刷新数据时让各段从 0 长到实际比例（离屏/自检环境直接到位）。"""
+
+        if not design.motion.enabled():
+            self._grow = 1.0
+            return
+        self._grow = 0.0
+        animation = QVariantAnimation(self)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(design.motion.DURATION_GROW)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.valueChanged.connect(self._on_grow)
+        animation.start()
+
+    def _on_grow(self, value: float) -> None:
+        self._grow = float(value)
         self.update()
 
     def set_highlight(self, index: int) -> None:
@@ -128,6 +149,7 @@ class StorageBar(QWidget):
             color = QColor(segment.color)
             if self._highlight >= 0 and index != self._highlight:
                 color.setAlpha(70)      # 其余变淡，被指的那段自己站出来
+            drawn = QRectF(rect.left(), rect.top(), rect.width() * self._grow, rect.height())
             painter.setBrush(color)
             if index == self._highlight:
                 pen = QPen(QColor(theme.text_1))
@@ -135,7 +157,7 @@ class StorageBar(QWidget):
                 painter.setPen(pen)
             else:
                 painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(rect)
+            painter.drawRect(drawn)
         painter.end()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
@@ -190,6 +212,17 @@ class LegendRow(QWidget):
         row.addWidget(share)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("点一下看这一类的明细")
+        self._dimmed = False
+
+    def set_dimmed(self, dimmed: bool) -> None:
+        """联动高亮：没被指到的那几行淡下去（颜色取当前主题）。"""
+
+        if dimmed == self._dimmed:
+            return
+        self._dimmed = dimmed
+        theme = design.theme()
+        color = theme.text_4 if dimmed else theme.text_1
+        self.setStyleSheet("QLabel { color: %s; }" % color)
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self.hovered.emit(self.index)
@@ -235,3 +268,18 @@ class StorageLegend(QWidget):
     @property
     def segments(self) -> list[Segment]:
         return self._segments
+
+    def rows(self) -> list["LegendRow"]:
+        """当前图例的每一行。
+
+        容量条悬停时要联动高亮，调用方需要拿到这些行——早先它直接把
+        StorageLegend 当成布局调 `itemAt()`，于是每次悬停都抛 AttributeError
+        （实测一次会话里抛了 529 次，全进了日志）。
+        """
+
+        result: list[LegendRow] = []
+        for i in range(self._layout.count()):
+            widget = self._layout.itemAt(i).widget()
+            if widget is not None:
+                result.append(widget)
+        return result

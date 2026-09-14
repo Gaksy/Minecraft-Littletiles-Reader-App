@@ -89,7 +89,11 @@ QWidget[card="true"], QFrame[card="true"], QGroupBox {{
 }}
 
 QGroupBox {{
-    margin-top: {m.gap_md}px;
+    /* 分组标题要浮在框线上方，且不能贴着线：
+       Qt 把边框画在"内容矩形"上，margin-top 这条空白就是标题的地盘，
+       title 的 top 是"从这条带子的顶边往下数"——负值会顶出控件被裁掉（踩过）。
+       所以：margin-top = 标题高度 + 间隙，top 只做几像素微调。 */
+    margin-top: {m.gap_lg + 6}px;
     padding: {m.gap_md}px;
     font-weight: bold;
 }}
@@ -97,8 +101,9 @@ QGroupBox {{
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: {m.gap_sm}px;
-    padding: 0 {m.gap_xs}px;
+    left: {m.gap_md}px;
+    top: {m.gap_xs}px;
+    padding: 0 {m.gap_sm}px;
     color: {t.text_1};
 }}
 

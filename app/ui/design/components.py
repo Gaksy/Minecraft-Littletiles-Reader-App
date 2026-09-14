@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
+    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -174,3 +175,46 @@ def title(text: str) -> QLabel:
     label = QLabel(text)
     label.setProperty("role", "title")
     return label
+
+
+def localize_buttons(
+    box: QDialogButtonBox,
+    ok: str = "确定",
+    cancel: str = "取消",
+    close: str = "关闭",
+) -> QDialogButtonBox:
+    """把标准按钮的英文标签换成中文（Qt 自带的 OK / Cancel / Close）。
+
+    Qt 的中文翻译包随发行版而变（有的机器上是英文），所以不靠它——
+    直接改文案，两端一致。
+    """
+
+    for standard, text in (
+        (QDialogButtonBox.StandardButton.Ok, ok),
+        (QDialogButtonBox.StandardButton.Cancel, cancel),
+        (QDialogButtonBox.StandardButton.Close, close),
+        (QDialogButtonBox.StandardButton.Yes, "是"),
+        (QDialogButtonBox.StandardButton.No, "否"),
+    ):
+        button = box.button(standard)
+        if button is not None:
+            button.setText(text)
+    return box
+
+
+class ButtonTextFilter(QObject):
+    """应用级事件过滤器：QDialogButtonBox 一露头就换中文按钮文案。
+
+    为什么用过滤器而不是逐个对话框改：Qt 自带的 OK / Cancel / Close 文案
+    随发行版变（有的机器上没装翻译包就是英文），而弹窗散在十几个文件里，
+    漏一个就露怯。这里统一兜住；`localize_buttons()` 仍旧可以单独用。
+    """
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 (Qt 命名)
+        if isinstance(watched, QDialogButtonBox) and event.type() in (
+            QEvent.Type.Show,
+            QEvent.Type.ChildAdded,
+            QEvent.Type.LayoutRequest,
+        ):
+            localize_buttons(watched)
+        return False

@@ -15,7 +15,7 @@ color = theme().accent            # 任何地方取语义色
 
 from __future__ import annotations
 
-from . import components, fonts, qss, theme, tokens
+from . import components, fonts, motion, qss, theme, tokens
 from .components import (
     SectionTitle,
     StatusChip,
@@ -55,6 +55,7 @@ __all__ = [
     "install",
     "is_dark_theme",
     "manager",
+    "motion",
     "primary_button",
     "qss",
     "row",

@@ -132,8 +132,24 @@ def install(app: QApplication | None = None, theme_name: str = "dark") -> ThemeM
     global _manager
     if _manager is None:
         _manager = ThemeManager(app, theme_name)
+        _install_button_text_filter(_manager._app)
     _manager.apply(theme_name)
     return _manager
+
+
+_button_filter = None
+
+
+def _install_button_text_filter(app: QApplication | None) -> None:
+    """装一个应用级过滤器，把标准弹窗按钮的英文文案换成中文（只装一次）。"""
+
+    global _button_filter
+    if app is None or _button_filter is not None:
+        return
+    from .components import ButtonTextFilter
+
+    _button_filter = ButtonTextFilter(app)
+    app.installEventFilter(_button_filter)
 
 
 def manager() -> ThemeManager:
@@ -173,5 +189,8 @@ def is_dark_theme() -> bool:
 def reset() -> None:
     """清掉全局管理器（测试用）。"""
 
-    global _manager
+    global _manager, _button_filter
+    if _button_filter is not None and _manager is not None and _manager._app is not None:
+        _manager._app.removeEventFilter(_button_filter)
+    _button_filter = None
     _manager = None
