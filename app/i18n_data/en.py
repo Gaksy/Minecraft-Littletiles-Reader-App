@@ -505,4 +505,7 @@ STRINGS = {
     '一般': 'Normal',
     '严重': 'Serious',
     '致命': 'Critical',
+
+    # ---- 检查更新：条目在但没发布 ----
+    '服务器上这个平台（%s）还没发布：版本号或下载地址还没填': 'This platform (%s) has no release yet: version or download link is still empty',
 }

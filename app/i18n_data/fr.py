@@ -488,4 +488,7 @@ STRINGS = {
     '一般': 'Normal',
     '严重': 'Grave',
     '致命': 'Critique',
+
+    # ---- 检查更新：条目在但没发布 ----
+    '服务器上这个平台（%s）还没发布：版本号或下载地址还没填': "Cette plateforme (%s) n'est pas encore publiée : version ou lien manquant",
 }

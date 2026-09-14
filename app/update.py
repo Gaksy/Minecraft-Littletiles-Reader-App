@@ -45,6 +45,8 @@ class UpdateInfo:
     platform: str
     url: str = ""
     note: str = ""
+    #: 服务器上有没有这个平台的条目（有但没填版本号 / 地址，也算"有"）
+    listed: bool = False
 
 
 def platform_key() -> str:
@@ -113,10 +115,10 @@ def check(client: ApiClient | None = None, current: str | None = None) -> Update
     current = current or __version__
     release = fetch_release(client)
     if release is None:
-        # 这个平台还没发布：不是错误，按"没有更新"处理，界面上说明一句
+        # 这个平台在服务器上还没有条目：不是错误，按"没有更新"处理，界面上说明一句
         logger().info("检查更新：服务器上没有当前平台的下载项")
         return UpdateInfo(current=current, latest="", has_update=False,
-                          platform=platform_key())
+                          platform=platform_key(), listed=False)
     newer = release.ready and is_newer(release.version, current)
     logger().info(
         "检查更新：当前 %s，服务器 %s（ready=%s）→ %s",
@@ -130,4 +132,5 @@ def check(client: ApiClient | None = None, current: str | None = None) -> Update
         platform=release.platform,
         url=release.url if release.ready else "",
         note=release.note,
+        listed=True,          # 有条目，只是可能还没填版本号 / 地址
     )

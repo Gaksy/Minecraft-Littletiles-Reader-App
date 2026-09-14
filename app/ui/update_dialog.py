@@ -42,6 +42,11 @@ class UpdateDialog(QDialog):
         elif info.latest:
             head = i18n.tr("已是最新版本（%s）") % info.current
             role = "ok"
+        elif info.listed:
+            # 服务器建好了条目但还没填版本号 / 下载地址（发布前就是这个状态）
+            head = i18n.tr("服务器上这个平台（%s）还没发布：版本号或下载地址还没填")
+            head = head % info.platform
+            role = "warn"
         else:
             head = i18n.tr("服务器上还没有当前平台（%s）的发布记录") % info.platform
             role = "warn"
