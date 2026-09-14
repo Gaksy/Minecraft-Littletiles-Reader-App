@@ -69,15 +69,9 @@ TEXT_FILES: tuple[tuple[str, str], ...] = (
 def texts() -> list[tuple[str, str]]:
     """可展示的全文：`[(标题, 内容)]`，找不到的文件自动跳过。"""
 
-    roots = [bundle_root()]
-    # macOS 的 .app 里，Frameworks（= 解包目录）与 Resources 是兄弟目录；
-    # 打包脚本把许可放在 Contents/Resources/，所以两边都要找。
-    sibling = bundle_root().parent / "Resources"
-    if sibling.is_dir():
-        roots.append(sibling)
     found: list[tuple[str, str]] = []
     for relative, title in TEXT_FILES:
-        for root in roots:
+        for root in _search_roots():
             path = root / relative
             if not path.is_file():
                 path = root / "packaging" / relative   # 开发环境：仓库里的同一份
@@ -89,6 +83,34 @@ def texts() -> list[tuple[str, str]]:
                 continue
             break
     return found
+
+
+def _search_roots() -> list[Path]:
+    """许可文本可能待着的地方，按优先级排。
+
+    打包脚本把许可放在**包根**（Windows 的 onedir 根、macOS 的
+    `Contents/Resources/`），而字体那份跟着字体进了解包目录 —— 只按
+    `bundle_root()` 找，会只找得到字体那一条（用户看到的"下拉框只剩字体了"）。
+    所以打包版的 exe 目录**和它上一层**都要找。
+    """
+
+    candidates: list[Path] = [bundle_root()]
+    # macOS 的 .app 里，Frameworks（= 解包目录）与 Resources 是兄弟目录
+    candidates.append(bundle_root().parent / "Resources")
+    try:
+        from .reader import app_folder
+
+        app = app_folder()          # Windows/zip：装应用的那个文件夹
+        candidates += [app, app.parent]
+    except Exception:               # 找 app_folder 失败不该影响许可展示
+        pass
+    seen: set[Path] = set()
+    roots: list[Path] = []
+    for path in candidates:
+        if path not in seen and path.is_dir():
+            seen.add(path)
+            roots.append(path)
+    return roots
 
 
 def summary() -> str:
