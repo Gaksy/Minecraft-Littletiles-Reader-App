@@ -168,6 +168,11 @@ def clean_build_env() -> dict:
 def align_runtime_dependencies(package_dir: Path) -> list[str]:
     """收拾包里那几个"运行时会找错"的依赖。
 
+    **只动 `LittleTilesReader\\_internal\\`（PyInstaller 运行时那一层）。**
+    包根上的那些 DLL 是**库 CLI 自己的依赖**（vcpkg 出来的 zlib1 / zstd / nbt++ …），
+    它们本来就该原样留着 —— 曾经把这层也一起"对齐"，结果删掉了 `zlib1.dll`，
+    库 CLI 直接报 "The code execution cannot proceed because zlib1.dll was not found"。
+
     两件事：
     1. `NEVER_BUNDLE_STEMS`（ICU 一族）**全部删掉** —— 它们会盖住 Windows 自带那份，
        而 Qt 要的正是系统那份无版本后缀的 ABI（详见常量上的注释）；
@@ -177,9 +182,12 @@ def align_runtime_dependencies(package_dir: Path) -> list[str]:
 
     dirs = _local_dll_dirs()
     aligned: list[str] = []
+    internal = package_dir / "LittleTilesReader" / "_internal"
+    if not internal.is_dir():
+        return aligned
 
     if NEVER_BUNDLE_STEMS:
-        for path in sorted(package_dir.rglob("*.dll")):
+        for path in sorted(internal.rglob("*.dll")):
             name = path.name.lower()
             if any(name.startswith(stem) for stem in NEVER_BUNDLE_STEMS):
                 path.unlink()
@@ -193,7 +201,7 @@ def align_runtime_dependencies(package_dir: Path) -> list[str]:
         }
         packaged = [
             path
-            for path in package_dir.rglob("*")
+            for path in internal.rglob("*")
             if path.is_file() and path.name.lower().startswith(stem)
             and path.name.lower().endswith(".dll")
         ]
@@ -252,9 +260,42 @@ def verify_frozen_app(package_dir: Path, *, timeout: int = 120) -> tuple[bool, s
             return False, "自检超时（多半弹了报错对话框卡住）"
     text = (out or "") + (err or "")
     if process.returncode == 0 and "全部通过" in text:
-        return True, "冻包自检通过（干净环境）"
+        cli_ok, cli_note = verify_readers_cli(package_dir, env)
+        if not cli_ok:
+            return False, cli_note
+        return True, "冻包自检通过（干净环境）；%s" % cli_note
     tail = "\n".join(line for line in text.strip().splitlines()[-6:])
     return False, "自检没通过（退出码 %s）：\n%s" % (process.returncode, tail)
+
+
+def verify_readers_cli(package_dir: Path, env: dict) -> tuple[bool, str]:
+    """再跑一遍**库 CLI**（包根那个 LittleTilesReader.exe）。
+
+    应用自检只看得到 Python 侧；库 CLI 的依赖（vcpkg 的 zlib1 / zstd / nbt++ …）
+    是另一套，同样会"构建成功、一导出就报缺 DLL"。这里跑一次 `--version` 兜底。
+    """
+
+    cli = package_dir / "LittleTilesReader.exe"
+    if not cli.is_file():
+        return False, "包里没有库 CLI：%s" % cli
+    try:
+        done = subprocess.run(
+            [str(cli), "--version"],
+            cwd=str(package_dir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "库 CLI 没在 60 秒内退出（可能缺 DLL 卡住了）"
+    output = (done.stdout or "").strip()
+    if done.returncode != 0 or not re.search(r"\d+\.\d+\.\d+", output):
+        return False, "库 CLI 起不来（退出码 %s）：%s" % (done.returncode, output[:200])
+    return True, "库 CLI 能跑（%s）" % output.splitlines()[-1].strip()
 
 
 def unify_msvc_runtime(package_dir: Path) -> list[str]:

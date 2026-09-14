@@ -508,6 +508,7 @@ tail -12 "$PKG/logs/$(ls -t "$PKG/logs" | head -1)"
 | 界面能开，但导出报"找不到 LittleTilesReader" | 第 2 步没编库 / `--with-reader` 没加。macOS 上 CLI 应在 `.app/Contents/Frameworks/reader/`，Windows 上在包根；用 `--self-check` 一看就知道找没找到 |
 | 中文变方框 | 字体没随包：确认 `app/resources/fonts/` 在 `_internal` 里（`--add-data` 已包含） |
 | 双击/`--self-check` 报 `ImportError: DLL load failed while importing QtWidgets: The specified procedure could not be found` | 包里的 **ICU** 盖住了系统那份：conda 的 PySide6 是按"Windows 自带 ICU 的无版本符号"（`ucnv_open`）编的，而 conda/代理运行时里的 icuuc 导出的是带版本后缀的（`ucnv_open_73` / `_78`）——PyInstaller 顺着 PATH 把后者打进了包。现在 `build_app.py` 会把 `icu*.dll` 一律删掉（`NEVER_BUNDLE_STEMS`），并**在干净环境里跑一次冻包自检**，通不过直接判构建失败 |
+| 应用/CLI 报 `The code execution cannot proceed because zlib1.dll was not found` | 包根那几个 DLL 是**库 CLI 自己的依赖**（vcpkg 的 `zlib1` / `zstd` / `nbt++` …），不能被"依赖对齐"当成重复项删掉。现在对齐**只动 `LittleTilesReader\_internal\`**，并且构建自检里**额外跑一次库 CLI 的 `--version`**（应用自检看不到库那套依赖） |
 | 同上，但包是在**别的机器**上打的 | 打包机的 PATH 里可能有别家运行时带的同名 DLL（实测：Codex 运行时自带 poppler，里面是 ICU 78）。`clean_build_env()` 会把这类目录从 PyInstaller 的 PATH 里剔掉 |
 | `--self-check` 报 `UnicodeEncodeError: 'charmap' codec ...` | 自检输出有中文、被重定向成管道时 Windows 退回 locale 编码。`app/selfcheck.py` 现在开头就把 stdout/stderr 切到 UTF-8（`errors="replace"`） |
 | 双击没反应（macOS） | 未签名被拦，照 `README-unsigned.md`；或直接跑 `.app/Contents/MacOS/LittleTilesReader` 看终端输出（**最快的排查手段**） |
