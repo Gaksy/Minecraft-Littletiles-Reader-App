@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QScrollArea  # noqa: E402
 
 from app.config import AppConfig  # noqa: E402
 from app.project import Project  # noqa: E402
@@ -90,7 +90,40 @@ def render_project(theme_name: str, path: Path) -> None:
         window.show()
         application.processEvents()
         window.grab().save(str(path))
+        # 容量条 / 图例 / 清理按钮在最底下，单独出一张（浅色下最看得出问题）
+        scroll = window.centralWidget().findChild(QScrollArea)
+        if scroll is not None:
+            bar = scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+            application.processEvents()
+            bottom = path.with_name(path.stem + "_bottom" + path.suffix)
+            window.grab().save(str(bottom))
         window.close()
+
+
+def render_dialogs(theme_name: str, output_dir: Path) -> None:
+    """两个新弹窗（项目配置 / 清空所有数据）也各出一张。"""
+
+    application = QApplication.instance() or QApplication([])
+    design.install(application, theme_name)
+    from app.ui.project_list import _DeleteProjectDialog
+    from app.ui.project_window import _ProjectConfigDialog
+    from app.ui.reset_dialog import ResetDataDialog
+
+    with tempfile.TemporaryDirectory(prefix="lt-theme-dlg-") as tmp:
+        root = Path(tmp)
+        project = Project.create(root / "house", "海滨小屋")
+        project.description = "给朋友看的版本"
+        project.save()
+        for dialog, name in (
+            (_ProjectConfigDialog(project, lambda: None), "config"),
+            (_DeleteProjectDialog(str(project.path), project), "delete"),
+            (ResetDataDialog(root), "reset"),
+        ):
+            dialog.show()
+            application.processEvents()
+            dialog.grab().save(str(output_dir / ("%s_%s.png" % (name, theme_name))))
+            dialog.close()
 
 
 def main() -> int:
@@ -105,8 +138,14 @@ def main() -> int:
     render_dialog("light", out_dir / "dialog_light.png")
     render_project("dark", out_dir / "project_dark.png")
     render_project("light", out_dir / "project_light.png")
+    render_dialogs("dark", out_dir)
+    render_dialogs("light", out_dir)
     for name in ("light", "dark", "dialog_light", "dialog_dark",
-                 "project_light", "project_dark"):
+                 "project_light", "project_dark",
+                 "project_light_bottom", "project_dark_bottom",
+                 "config_light", "config_dark",
+                 "delete_light", "delete_dark",
+                 "reset_light", "reset_dark"):
         print("  %s: %s" % (name, out_dir / (name + ".png")))
     return 0
 

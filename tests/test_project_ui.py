@@ -27,7 +27,12 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QDialog,
+    QMessageBox,
+    QPushButton,
+)
 
 from app.config import AppConfig  # noqa: E402
 from app.job import build_region_job, chunks_field, default_options, expand_chunks  # noqa: E402
@@ -367,6 +372,78 @@ def test_window(tmp: Path) -> None:
                  "btn_recompose", "btn_backups", "btn_rebuild", "btn_retention",
                  "storage_bar", "storage_legend", "history"):
         check("有 %s" % name, hasattr(window, name))
+    # 名称/简介/目录/存档位置在界面上只读展示（改要进「项目配置」）
+    for name in ("name_label", "description_label", "directory_label", "save_label",
+                 "btn_project_config", "btn_rebuild", "btn_delete"):
+        check("有 %s" % name, hasattr(window, name))
+    for gone in ("name_edit", "description_edit", "save_edit"):
+        check("没有可编辑的 %s（只读展示）" % gone, not hasattr(window, gone))
+    check("名称直接显示", window.name_label.text() == "界面演示", window.name_label.text())
+    check("简介直接显示", window.description_label.text() == "看看长什么样",
+          window.description_label.text())
+    check("目录直接显示", str(project.path) in window.directory_label.text())
+    # 这个演示项目还没设默认存档 → 界面上如实写「（未设置）」
+    check("存档位置直接显示",
+          window.save_label.text() == (project.save_root or "（未设置）"),
+          window.save_label.text())
+    check("按钮文案不带省略号",
+          all("…" not in button.text() for button in window.findChildren(QPushButton)),
+          str([b.text() for b in window.findChildren(QPushButton) if "…" in b.text()]))
+
+    # 项目配置弹窗：改完名字/简介/存档位置都要落盘并回显
+    from app.ui.project_window import _ProjectConfigDialog  # noqa: E402
+
+    config_dialog = _ProjectConfigDialog(window.project, window._move_project, window)
+    config_dialog.name_edit.setText("改过的名字")
+    config_dialog.description_edit.setPlainText("改过的简介")
+    config_dialog._save_root = str(tmp / "另一个存档")
+    window._apply_project_config(config_dialog.values())
+    config_dialog.close()
+    check("名字改完回显", window.name_label.text() == "改过的名字", window.name_label.text())
+    check("标题跟着名字走", window.windowTitle() == "项目 · 改过的名字", window.windowTitle())
+    check("简介改完回显", window.description_label.text() == "改过的简介")
+    check("存档位置改完回显", window.save_label.text() == str(tmp / "另一个存档"),
+          window.save_label.text())
+    reloaded = Project.load(project.path)
+    check("改完落盘了",
+          reloaded is not None and reloaded.name == "改过的名字"
+          and reloaded.save_root == str(tmp / "另一个存档"))
+
+    # 历史记录：只对"选中的那条"生效的按钮，没选就该是灰的
+    window._refresh_history()
+    window.history.clearSelection()
+    for name in ("btn_open_output", "btn_open_job", "btn_pack", "btn_rebuild",
+                 "btn_delete"):
+        check("没选中时 %s 是灰的" % name, not getattr(window, name).isEnabled())
+    check("查询区块跟选中无关，一直是亮的", window.btn_query.isEnabled())
+    if window.history.rowCount() == 0:
+        # 备份演示项目里没有导出记录：手工塞一条，验证"选中就亮"
+        window.store.add(
+            ExportRecord(
+                id="2026-09-14_0100_c0_0_r1", kind="region", name="c0_0_r1",
+                created_at="2026-09-14 01:00:00",
+                output_dir="outputs/2026-09-14_0100_c0_0_r1",
+                obj="outputs/2026-09-14_0100_c0_0_r1/x.obj",
+                chunks=[[0, 0]], faces=10, textures=[],
+            )
+        )
+        window._refresh_history()
+    window.history.selectRow(0)
+    for name in ("btn_open_output", "btn_open_job", "btn_pack", "btn_rebuild",
+                 "btn_delete"):
+        check("选中后 %s 亮了" % name, getattr(window, name).isEnabled())
+    check("删记录只剩一个按钮（合并了）", not hasattr(window, "btn_forget"))
+
+    # 容量条悬停 → 图例联动（早先这里每次悬停都抛 AttributeError，日志里堆了 529 条）
+    window._refresh_storage()
+    try:
+        window.storage_legend_hover(0)
+        hover_error = ""
+    except Exception as error:      # noqa: BLE001 - 自检要的就是"别抛"
+        hover_error = repr(error)
+    check("容量条悬停不抛异常", not hover_error, hover_error)
+    check("图例有可联动的行", len(window.storage_legend.rows()) >= 1,
+          str(len(window.storage_legend.rows())))
     check("备份被列出来了", "已备份 1 次" in window.backup_label.text(),
           window.backup_label.text())
     check("存档备份打进 zip 了", len(project.backups()) == 1 and project.backups()[0].is_file())
@@ -379,6 +456,22 @@ def test_window(tmp: Path) -> None:
 
 
 # ---- 5. 真实导出（需要测试数据 + 库 CLI） ------------------------------------
+
+
+class _FakeMessageBox:
+    """打包完那个"已打包"弹窗的替身：离屏下 executor() 会一直等人点。"""
+
+    Icon = QMessageBox.Icon
+    StandardButton = QMessageBox.StandardButton
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        pass
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: None
+
+    def exec(self) -> int:
+        return QMessageBox.StandardButton.Close
 
 
 class _FakeRegionDialog:
@@ -526,6 +619,28 @@ def test_real_export(tmp: Path, seen: list[tuple[str, str, str]]) -> None:
 
     keys = [c.key for c in categories(project.path)]
     check("体积统计里有导出与贴图", "outputs" in keys and "textures" in keys, str(keys))
+
+    # ---- 打包成 zip（拷到别处用：模型 + MTL + 贴图）----
+    print("打包成 zip：")
+    window.history.selectRow(0)
+    window.panel._message_box = _FakeMessageBox
+    packed = window.panel.pack_obj(project.path / record.obj)
+    if packed is None:
+        check("打包没抛异常", False, "pack_obj 返回 None")
+    else:
+        zip_path = Path(packed["zip"])
+        check("zip 落在产物目录里", zip_path.is_file() and zip_path.parent == out_dir,
+              str(zip_path))
+        check("包里带上了贴图", packed["textures"] >= 1, str(packed["textures"]))
+        check("包里没有缺图", not packed["missing"], str(packed["missing"]))
+        with zipfile.ZipFile(zip_path) as archive:
+            names = archive.namelist()
+        check("包里是模型 + MTL + textures/",
+              any(n.endswith(".obj") for n in names)
+              and any(n.endswith(".mtl") for n in names)
+              and sum(1 for n in names if n.startswith("textures/")) >= 1,
+              str(sorted(names)[:4]))
+        check("产物目录没被弄乱（job.json 还在）", (out_dir / "job.json").is_file())
 
     # ---- 贴图丢了能不能重建（§7.6：清理是安全的，丢的是算力能买回来的东西）----
     print("重建贴图：")
