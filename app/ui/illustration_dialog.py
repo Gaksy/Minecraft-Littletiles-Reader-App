@@ -1,44 +1,35 @@
-"""区块选择说明：展示 docs/chunk-selection-modes.svg。
+"""区块选择说明：三种模式各画一张示意图（`chunk_modes_art.py` 现画）。
 
-只读，固定大小。放在独立窗口而不是常驻在导出对话框里——图很大（1240×576），
+为什么不再贴那张固定配色的 SVG：深色主题下白底图太扎眼。现画的颜色全部取自
+`design.theme()`，深浅两套自动跟随（原 SVG 已删，见 docs/design.md）。
+
+只读、固定大小。放在独立窗口而不是常驻在导出对话框里——图很大，
 常驻会把导出对话框撑得又宽又空。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QLabel,
     QVBoxLayout,
     QWidget,
 )
 
-MODES_SVG = Path(__file__).resolve().parents[2] / "docs" / "chunk-selection-modes.svg"
-
-# 按原图缩放。0.72 → 约 893×415，普通笔记本屏幕放得下。
-DEFAULT_SCALE = 0.72
+from .. import i18n
+from . import design
+from .chunk_modes_art import ChunkModesIllustration
 
 
 class IllustrationDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None, scale: float = DEFAULT_SCALE) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("区块选择说明")
 
         layout = QVBoxLayout(self)
-        if MODES_SVG.is_file():
-            view = QSvgWidget(str(MODES_SVG))
-            size = view.renderer().defaultSize()
-            if size.isEmpty():       # 读不到原始尺寸时按已知的 1240×576 兜底
-                size.setWidth(1240)
-                size.setHeight(576)
-            view.setFixedSize(int(size.width() * scale), int(size.height() * scale))
-            layout.addWidget(view)
-        else:
-            layout.addWidget(QLabel("找不到示意图：%s" % MODES_SVG))
+        layout.setSpacing(design.METRICS.gap_md)
+        self.art = ChunkModesIllustration(self)
+        layout.addWidget(self.art)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -46,3 +37,4 @@ class IllustrationDialog(QDialog):
 
         # 固定大小：不让它被拖动改形，也不留多余空白
         layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+        i18n.translate(self)
